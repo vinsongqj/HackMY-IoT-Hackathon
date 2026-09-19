@@ -1,7 +1,7 @@
 # admin_routes.py — reads from your existing db.py, doesn't modify it
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
 
@@ -47,27 +47,32 @@ def stats():
     validated = [c for c in cars if c.get("payment_valid") is True]
 
     def _revenue_since(cutoff: datetime) -> float:
+        # updated_at from Supabase is always UTC - cutoff must stay UTC too, or a
+        # payment made "today" in local time can land on the wrong side of midnight
+        # and silently vanish from every window except "total".
         total = 0.0
         for c in validated:
             updated_at = c.get("updated_at")
             if not updated_at:
                 continue
             try:
-                ts = datetime.fromisoformat(updated_at.replace("Z", "+00:00")).replace(tzinfo=None)
+                ts = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
             except ValueError:
                 continue
             if ts >= cutoff:
                 total += float(c.get("paid_amount") or 0)
         return total
 
-    now = datetime.now()
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    week_start = today_start - timedelta(days=now.weekday())
+    now_utc = datetime.now(timezone.utc)
+    today_start = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = today_start - timedelta(days=now_utc.weekday())
     month_start = today_start.replace(day=1)
 
     total_revenue = sum(float(c.get("paid_amount") or 0) for c in validated)
 
-    today_str = now.strftime("%Y-%m-%d")
+    # entry_time comes from the simulator's ServerDateTime as a local-naive string
+    # (no timezone), unlike updated_at above - compare against local, not UTC, "today".
+    today_str = datetime.now().strftime("%Y-%m-%d")
     today_arrivals = sum(1 for c in cars if (c.get("entry_time") or "").startswith(today_str))
 
     current_occupied, capacity = occupancy_f.result()
@@ -141,23 +146,26 @@ def logs(page: int = 1, pageSize: int = 50):
 # Time-series helpers
 # ---------------------------------------------------------------------------
 
-def _parse_iso_local(value: str) -> datetime | None:
-    """Parse a (possibly timezone-aware) ISO timestamp and normalise it to a
-    naive *local* datetime — matches what the rest of this module does with
-    `datetime.now()` and the simulator's `YYYY-MM-DD HH:MM:SS` strings."""
+def _parse_utc_iso(value: str) -> datetime | None:
+    """Parse an ISO timestamp that should be UTC. Supabase `updated_at` values
+    come as UTC (with or without an offset); the frontend sends its range as
+    `Date.toISOString()` (also UTC). Anything tz-aware is normalised to UTC,
+    and anything naive is *assumed* UTC — matching how these two producers
+    actually behave."""
     if not value:
         return None
     try:
         dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
-    if dt.tzinfo is not None:
-        dt = dt.astimezone().replace(tzinfo=None)
-    return dt
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
-def _parse_server_dt(value: str) -> datetime | None:
-    """Simulator timestamps are plain 'YYYY-MM-DD HH:MM:SS' strings."""
+def _parse_local_naive(value: str) -> datetime | None:
+    """Simulator ServerDateTime strings are 'YYYY-MM-DD HH:MM:SS' with no
+    timezone - wall-clock local time on the machine running the simulator."""
     if not value:
         return None
     try:
@@ -186,70 +194,84 @@ def _bucket_range(start: datetime, end: datetime, bucket: str) -> list[datetime]
 
 
 # ---------------------------------------------------------------------------
-# Revenue series — bucket validated payments by hour/day from the `cars` table
+# Revenue series
+#
+# Bucketed in UTC, matching `updated_at` on the validated `cars` rows and the
+# UTC window the frontend sends. Emitted as UTC ISO so the browser can convert
+# each bin to its own local time for the axis label.
 # ---------------------------------------------------------------------------
 
 @router.get("/revenue")
 def revenue(
     from_: str = Query("", alias="from"),
     to: str = Query("", alias="to"),
-    bucket: str = "hour",
+    bucket: str = Query("hour"),
 ):
-    end = _parse_iso_local(to)
-    start = _parse_iso_local(from_)
-    if end is None:
-        end = datetime.now()
-    if start is None:
-        start = end - timedelta(hours=24)
     if bucket not in ("hour", "day"):
         bucket = "hour"
 
-    buckets: dict[datetime, float] = {b: 0.0 for b in _bucket_range(start, end, bucket)}
+    end = _parse_utc_iso(to) or datetime.now(timezone.utc)
+    start = _parse_utc_iso(from_) or (end - timedelta(hours=24))
+
+    # Pre-seed every bin so windows with no payments still render as a flat
+    # baseline instead of collapsing the chart.
+    bins: dict[datetime, float] = {b: 0.0 for b in _bucket_range(start, end, bucket)}
 
     for c in db.list_cars():
         if c.get("payment_valid") is not True:
             continue
-        ts = _parse_iso_local(c.get("updated_at") or "")
+        ts = _parse_utc_iso(c.get("updated_at") or "")
         if ts is None or ts < start or ts > end:
             continue
         key = _floor_bucket(ts, bucket)
-        if key in buckets:
-            buckets[key] += float(c.get("paid_amount") or 0)
+        if key in bins:
+            bins[key] += float(c.get("paid_amount") or 0)
 
     return [
         {"ts": k.isoformat(), "amount": round(v, 2)}
-        for k, v in sorted(buckets.items())
+        for k, v in sorted(bins.items())
     ]
 
 
 # ---------------------------------------------------------------------------
-# Occupancy series — reconstruct from each visit's [entry_time, exit_time] window.
-# A visit is "occupying a spot" at time T iff entry_time <= T and (exit_time is
-# null OR exit_time > T). exit_time being null means the car hasn't left yet.
+# Occupancy series
+#
+# Reconstructed from each visit's [entry_time, exit_time] window: a visit is
+# "occupying a spot" at time T iff entry_time <= T and (exit_time is null OR
+# exit_time > T). entry_time is only written when the simulator reports
+# Park / CarIn, so pending-exit cars aren't double-counted.
+#
+# entry_time / exit_time are naive *local* strings, so we bucket in local time:
+# the incoming UTC window is converted to local before flooring, and the
+# response carries naive local ISO — `new Date(ts)` in the browser treats that
+# as local, matching the bin it represents.
 # ---------------------------------------------------------------------------
 
 @router.get("/occupancy")
 def occupancy(
     from_: str = Query("", alias="from"),
     to: str = Query("", alias="to"),
-    bucket: str = "hour",
+    bucket: str = Query("hour"),
 ):
-    end = _parse_iso_local(to)
-    start = _parse_iso_local(from_)
-    if end is None:
-        end = datetime.now()
-    if start is None:
-        start = end - timedelta(hours=24)
     if bucket not in ("hour", "day"):
         bucket = "hour"
 
+    end_utc = _parse_utc_iso(to) or datetime.now(timezone.utc)
+    start_utc = _parse_utc_iso(from_) or (end_utc - timedelta(hours=24))
+
+    # Same instants, expressed as local wall-clock so we can compare directly
+    # against the simulator's naive timestamps.
+    end = end_utc.astimezone().replace(tzinfo=None)
+    start = start_utc.astimezone().replace(tzinfo=None)
+
     intervals: list[tuple[datetime, datetime | None]] = []
     for c in db.list_cars():
-        entry = _parse_server_dt(c.get("entry_time") or "")
+        entry = _parse_local_naive(c.get("entry_time") or "")
         if entry is None:
             continue
-        exit_dt = _parse_server_dt(c.get("exit_time") or "")
-        # Drop visits that don't overlap the requested window at all.
+        exit_dt = _parse_local_naive(c.get("exit_time") or "")
+        # Drop visits that don't overlap the requested window at all - otherwise
+        # every historical row would be scanned for every bin.
         if entry > end:
             continue
         if exit_dt is not None and exit_dt < start:
