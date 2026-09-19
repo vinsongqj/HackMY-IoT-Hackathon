@@ -26,3 +26,5 @@ SIMULATOR_BASE_URL = os.environ.get(
 SIMULATOR_USERNAME = os.environ.get("SIMULATOR_USERNAME", _simulator_settings.get("Name", "admin"))
 SIMULATOR_PASSWORD = os.environ.get("SIMULATOR_PASSWORD", _simulator_settings.get("Password", "admin"))
 PARKING_RATE_PER_MINUTE = float(os.environ.get("PARKING_RATE_PER_MINUTE", "1"))
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_SECRET_KEY = os.environ.get("SUPABASE_SECRET_KEY")

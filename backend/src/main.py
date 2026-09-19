@@ -1,10 +1,17 @@
+import asyncio
 import logging
+import threading
 from datetime import datetime
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi.concurrency import run_in_threadpool
 
 import config
-from level_layout import find_entry_exit_gates
+import db
+import event_mapping
+import operator_routes
+import ws
+from level_layout import find_entry_exit_gates, spot_names_by_distance_from_entry
 from simulator_client import SimulatorClient
 from webhook_security import compute_signature, verify_signature
 
@@ -14,8 +21,49 @@ logger = logging.getLogger("parking")
 app = FastAPI()
 client = SimulatorClient(config.SIMULATOR_BASE_URL, config.SIMULATOR_USERNAME, config.SIMULATOR_PASSWORD)
 
+db.init_db()
+operator_routes.init(client)
+app.include_router(operator_routes.router)
+
+
+_webhook_queue: asyncio.Queue = asyncio.Queue()
+WEBHOOK_WORKER_COUNT = 8
+
+
+async def _webhook_worker() -> None:
+    while True:
+        payload = await _webhook_queue.get()
+        try:
+            await run_in_threadpool(_process_webhook, payload)
+        except Exception:
+            logger.exception("Error processing queued webhook")
+        finally:
+            _webhook_queue.task_done()
+
+
+@app.on_event("startup")
+async def _on_startup() -> None:
+    ws.set_loop(asyncio.get_running_loop())
+    for _ in range(WEBHOOK_WORKER_COUNT):
+        asyncio.create_task(_webhook_worker())
+
+
+@app.websocket("/ws/events")
+async def events_ws(websocket: WebSocket):
+    await ws.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        ws.disconnect(websocket)
+
 ENTRY_GATE, EXIT_GATE = find_entry_exit_gates()
 logger.info("Entry gate: %s, Exit gate: %s", ENTRY_GATE, EXIT_GATE)
+
+SPOTS_BY_DISTANCE = spot_names_by_distance_from_entry()
+logger.info("Spots by distance from entry: %s", SPOTS_BY_DISTANCE)
 
 entry_gate_occupants: set[str] = set()
 exit_gate_occupants: set[str] = set()
@@ -42,7 +90,6 @@ def close_gate_for(gate_name: str | None, occupants: set[str], plate: str) -> No
     except Exception:
         logger.exception("Failed to close gate %s", gate_name)
 
-processed_event_ids: set[str] = set()
 last_sequence_id: int | None = None
 
 car_assigned_spot: dict[str, str] = {}
@@ -51,6 +98,7 @@ car_car_type: dict[str, str] = {}
 car_pending_charge: dict[str, dict] = {}
 car_expected_payment: dict[str, float] = {}
 reserved_spots: set[str] = set()
+_spot_lock = threading.Lock()
 
 
 def parse_server_time(value: str) -> datetime:
@@ -58,19 +106,20 @@ def parse_server_time(value: str) -> datetime:
 
 
 def pick_free_spot(car_type: str) -> str | None:
-    spots = client.list_parking_spots()
-    for spot in spots:
-        if spot["purpose"] != "Park":
+    live_by_name = {spot["name"]: spot for spot in client.list_parking_spots()}
+    for name in SPOTS_BY_DISTANCE:
+        spot = live_by_name.get(name)
+        if spot is None or spot["purpose"] != "Park":
             continue
         if spot["broken"] or spot["isUnderMaintenance"]:
             continue
         if spot["detectedCars"]:
             continue
-        if spot["name"] in reserved_spots:
+        if name in reserved_spots:
             continue
         if spot["parkingForCarType"] not in ("Any", car_type):
             continue
-        return spot["name"]
+        return name
     return None
 
 
@@ -80,17 +129,24 @@ def handle_car_spot_action(payload: dict) -> None:
     direction = payload["Direction"]
     car_type = payload.get("CarType", "Normal")
 
+    event = event_mapping.map_car_spot_action(payload)
+    if event:
+        ws.broadcast_nowait(event)
+
     if spot_type == "EntrySpot" and direction == "CarIn":
         open_gate_for(ENTRY_GATE, entry_gate_occupants, plate)
         car_car_type[plate] = car_type
-        spot_name = pick_free_spot(car_type)
+        with _spot_lock:
+            spot_name = pick_free_spot(car_type)
+            if spot_name is not None:
+                car_assigned_spot[plate] = spot_name
+                reserved_spots.add(spot_name)
         if spot_name is None:
             logger.warning("No free spot for %s, sending to leave", plate)
             client.car_goto(plate, "leavepark")
             return
-        car_assigned_spot[plate] = spot_name
-        reserved_spots.add(spot_name)
         client.car_goto(plate, spot_name)
+        db.upsert_car(plate, car_type=car_type, status="entering", assigned_spot=spot_name)
         logger.info("Routed %s to %s", plate, spot_name)
 
     elif spot_type == "EntrySpot" and direction == "CarOut":
@@ -98,6 +154,7 @@ def handle_car_spot_action(payload: dict) -> None:
 
     elif spot_type == "Park" and direction == "CarIn":
         car_park_entry_time[plate] = parse_server_time(payload["ServerDateTime"])
+        db.upsert_car(plate, status="parked", entry_time=payload["ServerDateTime"])
 
     elif spot_type == "Park" and direction == "CarOut":
         reserved_spots.discard(car_assigned_spot.pop(plate, None))
@@ -110,6 +167,14 @@ def handle_car_spot_action(payload: dict) -> None:
         charging_cost = parking_cost if car_car_type.get(plate) == "Electric" else 0
         car_pending_charge[plate] = {"parking_cost": parking_cost, "charging_cost": charging_cost}
         client.car_goto(plate, "exit")
+        db.upsert_car(
+            plate,
+            status="pending_exit",
+            exit_time=payload["ServerDateTime"],
+            parking_cost=parking_cost,
+            charging_cost=charging_cost,
+            expected_payment=parking_cost + charging_cost,
+        )
 
     elif spot_type == "ExitSpot" and direction == "CarIn":
         open_gate_for(EXIT_GATE, exit_gate_occupants, plate)
@@ -118,6 +183,7 @@ def handle_car_spot_action(payload: dict) -> None:
             return
         client.car_charge(plate, charge["parking_cost"], charge["charging_cost"])
         car_expected_payment[plate] = charge["parking_cost"] + charge["charging_cost"]
+        db.upsert_car(plate, status="at_exit")
 
     elif spot_type == "ExitSpot" and direction == "CarOut":
         close_gate_for(EXIT_GATE, exit_gate_occupants, plate)
@@ -127,33 +193,46 @@ def handle_payment_made(payload: dict) -> None:
     plate = payload["CarPlateNumber"]
     amount = float(payload["Amount"])
     expected = car_expected_payment.pop(plate, None)
+    valid = expected is not None and abs(amount - expected) <= 0.01
+    db.record_payment(plate, amount, expected, valid)
+    ws.broadcast_nowait(event_mapping.map_payment_made(payload, valid))
     if expected is None:
         logger.warning("Unexpected payment from %s: %s", plate, amount)
         return
-    if abs(amount - expected) > 0.01:
+    if not valid:
         logger.warning("Payment mismatch for %s: expected %s, got %s", plate, expected, amount)
     else:
         logger.info("Payment confirmed for %s: %s", plate, amount)
+        client.car_goto(plate, "leavepark")
+    db.upsert_car(plate, status="left", paid_amount=amount, payment_valid=valid)
 
 
 def handle_gate_action(payload: dict) -> None:
     logger.info("Gate %s is now %s", payload["Name"], payload["Action"])
+    event = event_mapping.map_gate_action(payload)
+    if event:
+        ws.broadcast_nowait(event)
 
 
 def handle_component_broken(payload: dict) -> None:
     logger.warning("Component broken: %s %s (fine %s)", payload["Type"], payload["Name"], payload["FineAmount"])
+    ws.broadcast_nowait(event_mapping.map_component_broken(payload))
 
 
 def handle_component_fixed(payload: dict) -> None:
     logger.info("Component fixed: %s %s", payload["Type"], payload["Name"])
+    ws.broadcast_nowait(event_mapping.map_component_fixed(payload))
 
 
 def handle_penalty(payload: dict) -> None:
     logger.warning("Penalty: %s (fine %s)", payload["Reason"], payload["FineAmount"])
+    db.record_penalty(payload["Reason"], float(payload["FineAmount"]), payload.get("Type"), payload.get("ComponentName"))
+    ws.broadcast_nowait(event_mapping.map_penalty(payload))
 
 
 def handle_carbon_monoxide_event(payload: dict) -> None:
     logger.warning("CO level %s in %s: %s", payload["DangerLevel"], payload["ZoneName"], payload["CarbonMonoxideLevel"])
+    ws.broadcast_nowait(event_mapping.map_carbon_monoxide_event(payload))
 
 
 def handle_test_webhook(payload: dict) -> None:
@@ -172,9 +251,30 @@ HANDLERS = {
 }
 
 
+def _process_webhook(payload: dict) -> None:
+    global last_sequence_id
+
+    event_id = payload.get("EventId")
+    if db.has_event(event_id):
+        return
+
+    sequence_id = payload.get("SequenceId")
+    if last_sequence_id is not None and sequence_id is not None and sequence_id != last_sequence_id + 1:
+        logger.warning("Sequence gap: expected %s, got %s", last_sequence_id + 1, sequence_id)
+    last_sequence_id = sequence_id
+
+    db.record_event(event_id, payload.get("EventClass"), sequence_id, payload)
+
+    handler = HANDLERS.get(payload.get("EventClass"))
+    if handler is None:
+        logger.warning("Unknown event class: %s", payload.get("EventClass"))
+        return
+
+    handler(payload)
+
+
 @app.post("/webhook")
 async def webhook(request: Request):
-    global last_sequence_id
     payload = await request.json()
 
     if payload.get("Signature") and not verify_signature(payload):
@@ -187,20 +287,5 @@ async def webhook(request: Request):
         )
         return {"status": "invalid_signature"}
 
-    event_id = payload.get("EventId")
-    if event_id in processed_event_ids:
-        return {"status": "duplicate"}
-    processed_event_ids.add(event_id)
-
-    sequence_id = payload.get("SequenceId")
-    if last_sequence_id is not None and sequence_id is not None and sequence_id != last_sequence_id + 1:
-        logger.warning("Sequence gap: expected %s, got %s", last_sequence_id + 1, sequence_id)
-    last_sequence_id = sequence_id
-
-    handler = HANDLERS.get(payload.get("EventClass"))
-    if handler is None:
-        logger.warning("Unknown event class: %s", payload.get("EventClass"))
-        return {"status": "unhandled"}
-
-    handler(payload)
-    return {"status": "ok"}
+    await _webhook_queue.put(payload)
+    return {"status": "queued"}

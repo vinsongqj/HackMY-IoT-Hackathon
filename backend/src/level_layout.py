@@ -28,3 +28,18 @@ def find_entry_exit_gates() -> tuple[str | None, str | None]:
     entry_gate = _nearest_gate_name(entry_spot["X"], entry_spot["Y"], gates) if entry_spot else None
     exit_gate = _nearest_gate_name(exit_spot["X"], exit_spot["Y"], gates) if exit_spot else None
     return entry_gate, exit_gate
+
+
+def spot_names_by_distance_from_entry() -> list[str]:
+    if not config.LEVEL_LAYOUT_FILE.exists():
+        return []
+
+    level = _load_level()
+    spots = level.get("ParkingSpots", [])
+    entry_spot = next((s for s in spots if s["Purpose"] == "EntrySpot"), None)
+    if entry_spot is None:
+        return []
+
+    park_spots = [s for s in spots if s["Purpose"] == "Park"]
+    park_spots.sort(key=lambda s: (s["X"] - entry_spot["X"]) ** 2 + (s["Y"] - entry_spot["Y"]) ** 2)
+    return [s["Name"] for s in park_spots]
