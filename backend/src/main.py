@@ -33,16 +33,26 @@ admin_routes.init(client)
 app.include_router(operator_routes.router)
 app.include_router(admin_routes.router)
 
-try:
-    barriers = client.list_barriers()
-except Exception:
-    logger.exception("Failed to list barriers at startup")
-    barriers = []
-for barrier in barriers:
-    try:
-        client.open_gate(barrier["name"])
-    except Exception:
-        logger.exception("Failed to open gate %s at startup", barrier["name"])
+GATE_OPEN_RETRY_SECONDS = 5
+
+
+async def _open_all_gates_when_ready() -> None:
+    """The simulator may not be running yet when the backend starts (or the user
+    starts it after) - retry in the background instead of a one-shot attempt at
+    import time, so gates still end up open once the simulator actually connects."""
+    while True:
+        try:
+            barriers = await run_in_threadpool(client.list_barriers)
+        except Exception:
+            await asyncio.sleep(GATE_OPEN_RETRY_SECONDS)
+            continue
+        for barrier in barriers:
+            try:
+                await run_in_threadpool(client.open_gate, barrier["name"])
+            except Exception:
+                logger.exception("Failed to open gate %s at startup", barrier["name"])
+        logger.info("Opened %d gate(s) at startup", len(barriers))
+        return
 
 
 # ---------------- Auth routes ----------------
@@ -100,6 +110,7 @@ async def _on_startup() -> None:
     ws.set_loop(asyncio.get_running_loop())
     for _ in range(WEBHOOK_WORKER_COUNT):
         asyncio.create_task(_webhook_worker())
+    asyncio.create_task(_open_all_gates_when_ready())
 
 
 @app.websocket("/ws/events")
