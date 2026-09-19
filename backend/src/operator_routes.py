@@ -1,12 +1,16 @@
 from datetime import datetime
 
-from fastapi import APIRouter
-
+from fastapi import APIRouter, Depends
+import auth
 import config
 import db
 from simulator_client import SimulatorClient
 
-router = APIRouter(prefix="/api/operator")
+
+router = APIRouter(
+    prefix="/api/operator",
+    dependencies=[Depends(auth.require_operator)],
+)
 
 _client: SimulatorClient | None = None
 

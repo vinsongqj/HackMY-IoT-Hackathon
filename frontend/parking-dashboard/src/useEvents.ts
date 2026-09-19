@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { getToken } from "./auth";
 import type { SimEvent } from "./types";
 
 export function useEvents() {
@@ -6,7 +7,9 @@ export function useEvents() {
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
-    const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/events`;
+    const token = getToken();
+    const qs = token ? `?token=${encodeURIComponent(token)}` : "";
+    const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/events${qs}`;
     const ws = new WebSocket(url);
     wsRef.current = ws;
 
@@ -19,8 +22,8 @@ export function useEvents() {
       }
     };
 
-    ws.onerror = () => { /* silent */ };
-    ws.onclose = () => { /* silent */ };
+    ws.onerror = () => {};
+    ws.onclose = () => {};
 
     return () => ws.close();
   }, []);

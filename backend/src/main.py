@@ -1,12 +1,15 @@
+# main.py
 import asyncio
 import logging
 import threading
 import time
 from datetime import datetime
 
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
 
+import admin_routes
+import auth
 import config
 import db
 import event_mapping
@@ -25,8 +28,45 @@ client = SimulatorClient(config.SIMULATOR_BASE_URL, config.SIMULATOR_USERNAME, c
 db.init_db()
 operator_routes.init(client)
 app.include_router(operator_routes.router)
+app.include_router(admin_routes.router)
 
 
+# ---------------- Auth routes ----------------
+@app.post("/api/auth/signup")
+def signup(body: dict):
+    username = (body.get("username") or "").strip()
+    password = body.get("password") or ""
+    role = body.get("role") or "operator"
+
+    if len(username) < 3:
+        raise HTTPException(400, "Username must be at least 3 characters")
+    if len(password) < 4:
+        raise HTTPException(400, "Password must be at least 4 characters")
+
+    user = auth.create_user(username, password, role)
+    token = auth.create_token(user)
+    return {"token": token, "username": user["username"], "role": user["role"]}
+
+
+@app.post("/api/auth/login")
+def login(body: dict):
+    username = (body.get("username") or body.get("email") or "").strip()
+    password = body.get("password") or ""
+
+    user = auth.authenticate(username, password)
+    if not user:
+        raise HTTPException(401, "Invalid username or password")
+
+    token = auth.create_token(user)
+    return {"token": token, "username": user["username"], "role": user["role"]}
+
+
+@app.get("/api/auth/me")
+def me(user: dict = Depends(auth.current_user)):
+    return user
+
+
+# ---------------- Webhook processing ----------------
 _webhook_queue: asyncio.Queue = asyncio.Queue()
 WEBHOOK_WORKER_COUNT = 8
 
@@ -50,7 +90,13 @@ async def _on_startup() -> None:
 
 
 @app.websocket("/ws/events")
-async def events_ws(websocket: WebSocket):
+async def events_ws(websocket: WebSocket, token: str | None = None):
+    if token:
+        try:
+            auth.decode_token(token)
+        except Exception:
+            await websocket.close(code=1008)
+            return
     await ws.connect(websocket)
     try:
         while True:
@@ -113,8 +159,6 @@ def _is_reserved(name: str) -> bool:
     if reserved_at is None:
         return False
     if time.time() - reserved_at > RESERVATION_TTL_SECONDS:
-        # Release event for this reservation never got processed in time (e.g. under
-        # backlog) - don't let a stale reservation block a spot forever.
         reserved_spots.pop(name, None)
         return False
     return True
@@ -288,6 +332,35 @@ def _process_webhook(payload: dict) -> None:
         return
 
     handler(payload)
+
+@app.post("/api/auth/signup")
+def signup(body: dict):
+    username = (body.get("username") or "").strip()
+    password = body.get("password") or ""
+    role = body.get("role") or "operator"
+    if len(username) < 3:
+        raise HTTPException(400, "Username must be at least 3 characters")
+    if len(password) < 4:
+        raise HTTPException(400, "Password must be at least 4 characters")
+    user = auth.create_user(username, password, role)
+    token = auth.create_token(user)
+    return {"token": token, "username": user["username"], "role": user["role"]}
+
+
+@app.post("/api/auth/login")
+def login(body: dict):
+    username = (body.get("username") or body.get("email") or "").strip()
+    password = body.get("password") or ""
+    user = auth.authenticate(username, password)
+    if not user:
+        raise HTTPException(401, "Invalid username or password")
+    token = auth.create_token(user)
+    return {"token": token, "username": user["username"], "role": user["role"]}
+
+
+@app.get("/api/auth/me")
+def me(user: dict = Depends(auth.current_user)):
+    return user
 
 
 @app.post("/webhook")
