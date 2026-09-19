@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends
 import auth
 import config
 import db
+import gate_state
 from simulator_client import SimulatorClient
 
 logger = logging.getLogger("parking.operator_routes")
@@ -130,11 +131,13 @@ def list_barriers():
 @router.post("/barriers/{name}/open", status_code=201)
 def open_barrier(name: str):
     _client.open_gate(name)
+    gate_state.mark_reopened(name)
 
 
 @router.post("/barriers/{name}/close", status_code=201)
 def close_barrier(name: str):
     _client.close_gate(name)
+    gate_state.mark_manual_close(name)
 
 
 @router.post("/barriers/{name}/repair", status_code=201)

@@ -1,4 +1,5 @@
 import logging
+import socket
 
 import requests
 
@@ -12,6 +13,52 @@ _HEADERS = {
     "Authorization": f"Bearer {config.SUPABASE_SECRET_KEY}",
     "Content-Type": "application/json",
 }
+
+_session_id: str | None = None
+
+
+def start_session() -> str:
+    """Call once at startup. Multiple machines can run their own backend + simulator
+    against this SAME Supabase project - sessions.id is a randomly-generated UUID
+    (gen_random_uuid() server-side), so no shared counter or coordination is needed
+    between machines and the value never leaks a "how many times has this restarted"
+    count. ALL of this machine's prior sessions' leftover car_slots rows get cleaned
+    up (matched by hostname) - not just the single most recent one, since a run that
+    crashed immediately (e.g. port already in use) can leave several stale sessions
+    in a row with the real orphaned data sitting under an older one. Another
+    machine's currently-active session is never touched."""
+    global _session_id
+    hostname = socket.gethostname()
+
+    resp = requests.get(
+        f"{_BASE_URL}/sessions",
+        headers=_HEADERS,
+        params={"hostname": f"eq.{hostname}", "select": "id"},
+        timeout=10,
+    )
+    resp.raise_for_status()
+    prior_ids = [row["id"] for row in resp.json()]
+    if prior_ids:
+        try:
+            requests.delete(
+                f"{_BASE_URL}/car_slots",
+                headers={**_HEADERS, "Prefer": "return=minimal"},
+                params={"session_id": f"in.({','.join(prior_ids)})"},
+                timeout=10,
+            )
+        except requests.exceptions.RequestException:
+            logger.warning("Failed to clean up prior sessions' car_slots for host %s", hostname, exc_info=True)
+
+    resp = requests.post(
+        f"{_BASE_URL}/sessions",
+        headers={**_HEADERS, "Prefer": "return=representation"},
+        json={"hostname": hostname},
+        timeout=10,
+    )
+    resp.raise_for_status()
+    _session_id = resp.json()[0]["id"]
+    logger.info("Started session %s on host %s", _session_id, hostname)
+    return _session_id
 
 
 def init_db() -> None:
@@ -54,7 +101,7 @@ def create_visit(plate: str, **fields) -> int | None:
         resp = requests.post(
             f"{_BASE_URL}/cars",
             headers={**_HEADERS, "Prefer": "return=representation"},
-            json={"plate": plate, "session_uid": config.SESSION_UID, **fields},
+            json={"plate": plate, "session_id": _session_id, **fields},
             timeout=10,
         )
         resp.raise_for_status()
@@ -104,26 +151,10 @@ def record_penalty(reason: str, fine_amount: float, component_type: str | None, 
             "fine_amount": fine_amount,
             "component_type": component_type,
             "component_name": component_name,
+            "session_id": _session_id,
         },
         timeout=10,
     )
-
-
-def wipe_car_slots() -> None:
-    """Call once at startup. car_slots marks which visits are currently active THIS
-    session - a row left over from a previous process can no longer be trusted
-    (that simulator instance is gone), so instead of reconciling it, just start
-    every session with a clean table. The visit's actual history in `cars` is
-    untouched - this only drops the pointer that says 'currently active'."""
-    try:
-        requests.delete(
-            f"{_BASE_URL}/car_slots",
-            headers={**_HEADERS, "Prefer": "return=minimal"},
-            params={"plate": "not.is.null"},
-            timeout=10,
-        )
-    except requests.exceptions.RequestException:
-        logger.warning("wipe_car_slots failed", exc_info=True)
 
 
 def add_slot(visit_id: int, plate: str) -> None:
@@ -131,7 +162,7 @@ def add_slot(visit_id: int, plate: str) -> None:
         requests.post(
             f"{_BASE_URL}/car_slots",
             headers={**_HEADERS, "Prefer": "return=minimal"},
-            json={"visit_id": visit_id, "plate": plate},
+            json={"visit_id": visit_id, "plate": plate, "session_id": _session_id},
             timeout=10,
         )
     except requests.exceptions.RequestException:
@@ -158,7 +189,7 @@ def list_slots() -> list[dict]:
     resp = requests.get(
         f"{_BASE_URL}/car_slots",
         headers=_HEADERS,
-        params={"select": "cars(*)"},
+        params={"select": "cars(*)", "session_id": f"eq.{_session_id}"},
         timeout=10,
     )
     resp.raise_for_status()
@@ -166,18 +197,26 @@ def list_slots() -> list[dict]:
 
 
 def list_cars() -> list[dict]:
-    resp = requests.get(f"{_BASE_URL}/cars", headers=_HEADERS, timeout=10)
+    """This machine's own session history only - per-machine admin scope."""
+    resp = requests.get(
+        f"{_BASE_URL}/cars",
+        headers=_HEADERS,
+        params={"session_id": f"eq.{_session_id}"},
+        timeout=10,
+    )
     resp.raise_for_status()
     return resp.json()
 
 
 def get_car(plate: str) -> dict | None:
-    """Most recent visit for this plate - a plate can have many rows now, so this
-    is no longer a unique lookup by plate alone."""
+    """Most recent visit for this plate WITHIN this machine's own session - a plate
+    can have many rows now, and different machines' simulators can independently
+    generate the same plate string for different physical cars, so this must stay
+    session-scoped rather than a bare plate lookup."""
     resp = requests.get(
         f"{_BASE_URL}/cars",
         headers=_HEADERS,
-        params={"plate": f"eq.{plate}", "order": "id.desc", "limit": 1},
+        params={"plate": f"eq.{plate}", "session_id": f"eq.{_session_id}", "order": "id.desc", "limit": 1},
         timeout=10,
     )
     resp.raise_for_status()
@@ -189,7 +228,7 @@ def list_penalties(limit: int = 200) -> list[dict]:
     resp = requests.get(
         f"{_BASE_URL}/penalties",
         headers=_HEADERS,
-        params={"order": "received_at.desc", "limit": limit},
+        params={"session_id": f"eq.{_session_id}", "order": "received_at.desc", "limit": limit},
         timeout=10,
     )
     resp.raise_for_status()

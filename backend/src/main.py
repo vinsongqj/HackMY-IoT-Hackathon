@@ -13,9 +13,10 @@ import auth
 import config
 import db
 import event_mapping
+import gate_state
 import operator_routes
 import ws
-from level_layout import find_entry_exit_gates, spot_names_by_distance_from_entry
+from level_layout import spot_names_by_distance_from_entry
 from simulator_client import SimulatorClient
 from webhook_security import compute_signature, verify_signature
 
@@ -26,11 +27,22 @@ app = FastAPI()
 client = SimulatorClient(config.SIMULATOR_BASE_URL, config.SIMULATOR_USERNAME, config.SIMULATOR_PASSWORD)
 
 db.init_db()
-db.wipe_car_slots()
+db.start_session()
 operator_routes.init(client)
 admin_routes.init(client)
 app.include_router(operator_routes.router)
 app.include_router(admin_routes.router)
+
+try:
+    barriers = client.list_barriers()
+except Exception:
+    logger.exception("Failed to list barriers at startup")
+    barriers = []
+for barrier in barriers:
+    try:
+        client.open_gate(barrier["name"])
+    except Exception:
+        logger.exception("Failed to open gate %s at startup", barrier["name"])
 
 
 # ---------------- Auth routes ----------------
@@ -107,28 +119,8 @@ async def events_ws(websocket: WebSocket, token: str | None = None):
     finally:
         ws.disconnect(websocket)
 
-ENTRY_GATE, EXIT_GATE = find_entry_exit_gates()
-logger.info("Entry gate: %s, Exit gate: %s", ENTRY_GATE, EXIT_GATE)
-
 SPOTS_BY_DISTANCE = spot_names_by_distance_from_entry()
 logger.info("Spots by distance from entry: %s", SPOTS_BY_DISTANCE)
-
-def open_gate_for(gate_name: str | None) -> None:
-    if gate_name is None:
-        return
-    try:
-        client.open_gate(gate_name)
-    except Exception:
-        logger.exception("Failed to open gate %s", gate_name)
-
-
-def close_gate_for(gate_name: str | None) -> None:
-    if gate_name is None:
-        return
-    try:
-        client.close_gate(gate_name)
-    except Exception:
-        logger.exception("Failed to close gate %s", gate_name)
 
 last_sequence_id: int | None = None
 
@@ -187,7 +179,6 @@ def handle_car_spot_action(payload: dict) -> None:
         ws.broadcast_nowait(event)
 
     if spot_type == "EntrySpot" and direction == "CarIn":
-        open_gate_for(ENTRY_GATE)
         car_car_type[plate] = car_type
         car_planned_duration[plate] = int(payload.get("PlannedParkingDurationInMinutes", 1)) or 1
         with _spot_lock:
@@ -205,9 +196,6 @@ def handle_car_spot_action(payload: dict) -> None:
         if visit_id is not None:
             db.add_slot(visit_id, plate)
         logger.info("Routed %s to %s (visit %s)", plate, spot_name, visit_id)
-
-    elif spot_type == "EntrySpot" and direction == "CarOut":
-        close_gate_for(ENTRY_GATE)
 
     elif spot_type == "Park" and direction == "CarIn":
         car_park_entry_time[plate] = parse_server_time(payload["ServerDateTime"])
@@ -239,7 +227,6 @@ def handle_car_spot_action(payload: dict) -> None:
             )
 
     elif spot_type == "ExitSpot" and direction == "CarIn":
-        open_gate_for(EXIT_GATE)
         charge = car_pending_charge.pop(plate, None)
         if charge is None:
             return
@@ -248,9 +235,6 @@ def handle_car_spot_action(payload: dict) -> None:
         visit_id = car_visit_id.get(plate)
         if visit_id is not None:
             db.update_visit(visit_id, status="at_exit")
-
-    elif spot_type == "ExitSpot" and direction == "CarOut":
-        close_gate_for(EXIT_GATE)
 
 
 def handle_payment_made(payload: dict) -> None:
@@ -276,10 +260,18 @@ def handle_payment_made(payload: dict) -> None:
 
 
 def handle_gate_action(payload: dict) -> None:
-    logger.info("Gate %s is now %s", payload["Name"], payload["Action"])
+    name = payload["Name"]
+    logger.info("Gate %s is now %s", name, payload["Action"])
     event = event_mapping.map_gate_action(payload)
     if event:
         ws.broadcast_nowait(event)
+
+    if payload["Action"] == "Closed" and not gate_state.is_manually_closed(name):
+        logger.warning("Gate %s closed unexpectedly, reopening", name)
+        try:
+            client.open_gate(name)
+        except Exception:
+            logger.exception("Failed to reopen gate %s", name)
 
 
 def handle_component_broken(payload: dict) -> None:
