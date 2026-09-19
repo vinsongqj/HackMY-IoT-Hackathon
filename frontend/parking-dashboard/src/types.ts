@@ -24,7 +24,7 @@ export interface ParkingSpot extends ComponentState {
   purpose: SpotPurpose;
   parkingForCarType: SpotCarType;
   zoneParent: string;
-  detectedCars: string[];
+  detectedCars: number;
 }
 
 // ---------- Car ----------

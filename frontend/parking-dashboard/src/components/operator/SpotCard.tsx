@@ -9,7 +9,7 @@ interface Props {
 }
 
 export function SpotCard({ spot, onRepair, onSendCar }: Props) {
-  const occupied = spot.detectedCars.length > 0;
+  const occupied = spot.detectedCars > 0;
   const typeTone =
     spot.parkingForCarType === "Electric"   ? "blue"   :
     spot.parkingForCarType === "Accessible" ? "yellow" : "gray";
@@ -35,7 +35,7 @@ export function SpotCard({ spot, onRepair, onSendCar }: Props) {
 
       {occupied && (
         <div className="tile-row" style={{ color: "var(--text)" }}>
-          🚗 {spot.detectedCars.join(", ")}
+          🚗 {spot.detectedCars} car{spot.detectedCars > 1 ? "s" : ""}
         </div>
       )}
 

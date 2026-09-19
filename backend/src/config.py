@@ -1,10 +1,15 @@
 import json
 import os
+import uuid
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Regenerated every backend process start - purely a forensic tag on history rows
+# ("which run recorded this visit"), not used for any filtering/correctness logic.
+SESSION_UID = str(uuid.uuid4())
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SIMULATOR_SETTINGS_FILE = REPO_ROOT / "ParkingSimulator-win-x64" / "settings" / "settings.json"

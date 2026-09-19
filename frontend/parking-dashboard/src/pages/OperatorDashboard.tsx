@@ -55,7 +55,7 @@ export function OperatorDashboard() {
   if (!snap) return <div className="loading">Loading dashboard…</div>;
 
   const spotsPark = snap.spots.filter((s) => s.purpose === "Park");
-  const occupied = spotsPark.filter((s) => s.detectedCars.length > 0).length;
+  const occupied = spotsPark.filter((s) => s.detectedCars > 0).length;
   const barriersOpen = snap.barriers.filter((b) => b.state === "Open").length;
 
   return (

@@ -26,7 +26,9 @@ app = FastAPI()
 client = SimulatorClient(config.SIMULATOR_BASE_URL, config.SIMULATOR_USERNAME, config.SIMULATOR_PASSWORD)
 
 db.init_db()
+db.wipe_car_slots()
 operator_routes.init(client)
+admin_routes.init(client)
 app.include_router(operator_routes.router)
 app.include_router(admin_routes.router)
 
@@ -70,7 +72,6 @@ def me(user: dict = Depends(auth.current_user)):
 _webhook_queue: asyncio.Queue = asyncio.Queue()
 WEBHOOK_WORKER_COUNT = 8
 
-
 async def _webhook_worker() -> None:
     while True:
         payload = await _webhook_queue.get()
@@ -112,25 +113,17 @@ logger.info("Entry gate: %s, Exit gate: %s", ENTRY_GATE, EXIT_GATE)
 SPOTS_BY_DISTANCE = spot_names_by_distance_from_entry()
 logger.info("Spots by distance from entry: %s", SPOTS_BY_DISTANCE)
 
-entry_gate_occupants: set[str] = set()
-exit_gate_occupants: set[str] = set()
-
-
-def open_gate_for(gate_name: str | None, occupants: set[str], plate: str) -> None:
+def open_gate_for(gate_name: str | None) -> None:
     if gate_name is None:
         return
-    occupants.add(plate)
     try:
         client.open_gate(gate_name)
     except Exception:
         logger.exception("Failed to open gate %s", gate_name)
 
 
-def close_gate_for(gate_name: str | None, occupants: set[str], plate: str) -> None:
+def close_gate_for(gate_name: str | None) -> None:
     if gate_name is None:
-        return
-    occupants.discard(plate)
-    if occupants:
         return
     try:
         client.close_gate(gate_name)
@@ -145,8 +138,9 @@ car_car_type: dict[str, str] = {}
 car_planned_duration: dict[str, int] = {}
 car_pending_charge: dict[str, dict] = {}
 car_expected_payment: dict[str, float] = {}
+car_visit_id: dict[str, int] = {}
 reserved_spots: dict[str, float] = {}
-RESERVATION_TTL_SECONDS = 120
+RESERVATION_TTL_SECONDS = 30
 _spot_lock = threading.Lock()
 
 
@@ -193,7 +187,7 @@ def handle_car_spot_action(payload: dict) -> None:
         ws.broadcast_nowait(event)
 
     if spot_type == "EntrySpot" and direction == "CarIn":
-        open_gate_for(ENTRY_GATE, entry_gate_occupants, plate)
+        open_gate_for(ENTRY_GATE)
         car_car_type[plate] = car_type
         car_planned_duration[plate] = int(payload.get("PlannedParkingDurationInMinutes", 1)) or 1
         with _spot_lock:
@@ -206,15 +200,20 @@ def handle_car_spot_action(payload: dict) -> None:
             client.car_goto(plate, "leavepark")
             return
         client.car_goto(plate, spot_name)
-        db.upsert_car(plate, car_type=car_type, status="entering", assigned_spot=spot_name)
-        logger.info("Routed %s to %s", plate, spot_name)
+        visit_id = db.create_visit(plate, car_type=car_type, status="entering", assigned_spot=spot_name)
+        car_visit_id[plate] = visit_id
+        if visit_id is not None:
+            db.add_slot(visit_id, plate)
+        logger.info("Routed %s to %s (visit %s)", plate, spot_name, visit_id)
 
     elif spot_type == "EntrySpot" and direction == "CarOut":
-        close_gate_for(ENTRY_GATE, entry_gate_occupants, plate)
+        close_gate_for(ENTRY_GATE)
 
     elif spot_type == "Park" and direction == "CarIn":
         car_park_entry_time[plate] = parse_server_time(payload["ServerDateTime"])
-        db.upsert_car(plate, status="parked", entry_time=payload["ServerDateTime"])
+        visit_id = car_visit_id.get(plate)
+        if visit_id is not None:
+            db.update_visit(visit_id, status="parked", entry_time=payload["ServerDateTime"])
 
     elif spot_type == "Park" and direction == "CarOut":
         released_spot = car_assigned_spot.pop(plate, None)
@@ -228,26 +227,30 @@ def handle_car_spot_action(payload: dict) -> None:
         charging_cost = parking_cost if car_car_type.get(plate) == "Electric" else 0
         car_pending_charge[plate] = {"parking_cost": parking_cost, "charging_cost": charging_cost}
         client.car_goto(plate, "exit")
-        db.upsert_car(
-            plate,
-            status="pending_exit",
-            exit_time=payload["ServerDateTime"],
-            parking_cost=parking_cost,
-            charging_cost=charging_cost,
-            expected_payment=parking_cost + charging_cost,
-        )
+        visit_id = car_visit_id.get(plate)
+        if visit_id is not None:
+            db.update_visit(
+                visit_id,
+                status="pending_exit",
+                exit_time=payload["ServerDateTime"],
+                parking_cost=parking_cost,
+                charging_cost=charging_cost,
+                expected_payment=parking_cost + charging_cost,
+            )
 
     elif spot_type == "ExitSpot" and direction == "CarIn":
-        open_gate_for(EXIT_GATE, exit_gate_occupants, plate)
+        open_gate_for(EXIT_GATE)
         charge = car_pending_charge.pop(plate, None)
         if charge is None:
             return
         client.car_charge(plate, charge["parking_cost"], charge["charging_cost"])
         car_expected_payment[plate] = charge["parking_cost"] + charge["charging_cost"]
-        db.upsert_car(plate, status="at_exit")
+        visit_id = car_visit_id.get(plate)
+        if visit_id is not None:
+            db.update_visit(visit_id, status="at_exit")
 
     elif spot_type == "ExitSpot" and direction == "CarOut":
-        close_gate_for(EXIT_GATE, exit_gate_occupants, plate)
+        close_gate_for(EXIT_GATE)
 
 
 def handle_payment_made(payload: dict) -> None:
@@ -255,7 +258,8 @@ def handle_payment_made(payload: dict) -> None:
     amount = float(payload["Amount"])
     expected = car_expected_payment.pop(plate, None)
     valid = expected is not None and abs(amount - expected) <= 0.01
-    db.record_payment(plate, amount, expected, valid)
+    visit_id = car_visit_id.get(plate)
+    db.record_payment(visit_id, plate, amount, expected, valid)
     ws.broadcast_nowait(event_mapping.map_payment_made(payload, valid))
     if expected is None:
         logger.warning("Unexpected payment from %s: %s", plate, amount)
@@ -265,7 +269,10 @@ def handle_payment_made(payload: dict) -> None:
     else:
         logger.info("Payment confirmed for %s: %s", plate, amount)
         client.car_goto(plate, "leavepark")
-    db.upsert_car(plate, status="left", paid_amount=amount, payment_valid=valid)
+    if visit_id is not None:
+        db.update_visit(visit_id, status="left", paid_amount=amount, payment_valid=valid)
+        db.remove_slot(visit_id)
+    car_visit_id.pop(plate, None)
 
 
 def handle_gate_action(payload: dict) -> None:
@@ -332,35 +339,6 @@ def _process_webhook(payload: dict) -> None:
         return
 
     handler(payload)
-
-@app.post("/api/auth/signup")
-def signup(body: dict):
-    username = (body.get("username") or "").strip()
-    password = body.get("password") or ""
-    role = body.get("role") or "operator"
-    if len(username) < 3:
-        raise HTTPException(400, "Username must be at least 3 characters")
-    if len(password) < 4:
-        raise HTTPException(400, "Password must be at least 4 characters")
-    user = auth.create_user(username, password, role)
-    token = auth.create_token(user)
-    return {"token": token, "username": user["username"], "role": user["role"]}
-
-
-@app.post("/api/auth/login")
-def login(body: dict):
-    username = (body.get("username") or body.get("email") or "").strip()
-    password = body.get("password") or ""
-    user = auth.authenticate(username, password)
-    if not user:
-        raise HTTPException(401, "Invalid username or password")
-    token = auth.create_token(user)
-    return {"token": token, "username": user["username"], "role": user["role"]}
-
-
-@app.get("/api/auth/me")
-def me(user: dict = Depends(auth.current_user)):
-    return user
 
 
 @app.post("/webhook")

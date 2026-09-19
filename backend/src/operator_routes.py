@@ -1,3 +1,5 @@
+import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 from fastapi import APIRouter, Depends
@@ -6,6 +8,11 @@ import config
 import db
 from simulator_client import SimulatorClient
 
+logger = logging.getLogger("parking.operator_routes")
+
+# /state fans out to 5 simulator calls + 2 DB calls - running them in parallel turns
+# total latency into max(latency) instead of sum(latency), since they're all independent I/O.
+_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="operator-state")
 
 router = APIRouter(
     prefix="/api/operator",
@@ -18,6 +25,26 @@ _client: SimulatorClient | None = None
 def init(client: SimulatorClient) -> None:
     global _client
     _client = client
+
+
+def _safe_list(label: str, fn) -> list:
+    try:
+        return fn()
+    except Exception:
+        logger.warning("Simulator call failed for %s, returning empty list", label, exc_info=True)
+        return []
+
+
+def _penalty_view(row: dict) -> dict:
+    return {
+        "id": str(row.get("id")),
+        "type": row.get("reason"),
+        "component": row.get("component_name"),
+        "plate": None,
+        "fineAmount": row.get("fine_amount"),
+        "reason": row.get("reason"),
+        "occurredAt": row.get("received_at"),
+    }
 
 
 def _car_view(row: dict) -> dict:
@@ -68,13 +95,21 @@ def _car_view(row: dict) -> dict:
 
 @router.get("/state")
 def operator_state():
-    barriers = _client.list_barriers()
-    spots = _client.list_parking_spots()
-    fans = _client.list_exhaust_fans()
-    lights = _client.list_lights()
-    zones = _client.list_zones()
-    cars = [_car_view(row) for row in db.list_cars()]
-    penalties = db.list_penalties()
+    barriers_f = _executor.submit(_safe_list, "barriers", _client.list_barriers)
+    spots_f = _executor.submit(_safe_list, "spots", _client.list_parking_spots)
+    fans_f = _executor.submit(_safe_list, "fans", _client.list_exhaust_fans)
+    lights_f = _executor.submit(_safe_list, "lights", _client.list_lights)
+    zones_f = _executor.submit(_safe_list, "zones", _client.list_zones)
+    cars_f = _executor.submit(db.list_slots)
+    penalties_f = _executor.submit(db.list_penalties)
+
+    barriers = barriers_f.result()
+    spots = spots_f.result()
+    fans = fans_f.result()
+    lights = lights_f.result()
+    zones = zones_f.result()
+    cars = [_car_view(row) for row in cars_f.result()]
+    penalties = [_penalty_view(row) for row in penalties_f.result()]
     return {
         "barriers": barriers,
         "spots": spots,
@@ -89,7 +124,7 @@ def operator_state():
 # ---- Barriers ----
 @router.get("/barriers")
 def list_barriers():
-    return _client.list_barriers()
+    return _safe_list("barriers", _client.list_barriers)
 
 
 @router.post("/barriers/{name}/open", status_code=201)
@@ -110,7 +145,7 @@ def repair_barrier(name: str):
 # ---- Spots ----
 @router.get("/spots")
 def list_spots():
-    return _client.list_parking_spots()
+    return _safe_list("spots", _client.list_parking_spots)
 
 
 @router.post("/spots/{name}/repair", status_code=201)
@@ -121,7 +156,7 @@ def repair_spot(name: str):
 # ---- Cars ----
 @router.get("/cars")
 def list_cars():
-    return [_car_view(row) for row in db.list_cars()]
+    return [_car_view(row) for row in db.list_slots()]
 
 
 @router.get("/cars/{plate}")
@@ -147,7 +182,9 @@ def charge_car(plate: str, parkingCost: float, chargingCost: float):
 
 @router.post("/cars/{plate}/validate-payment", status_code=201)
 def validate_payment(plate: str):
-    db.upsert_car(plate, payment_valid=True)
+    row = db.get_car(plate)
+    if row is not None:
+        db.update_visit(row["id"], payment_valid=True)
 
 
 @router.post("/cars/{plate}/goto/{destination}", status_code=201)
@@ -158,7 +195,7 @@ def send_car(plate: str, destination: str):
 # ---- Fans ----
 @router.get("/fans")
 def list_fans():
-    return _client.list_exhaust_fans()
+    return _safe_list("fans", _client.list_exhaust_fans)
 
 
 @router.post("/fans/{name}/on", status_code=201)
@@ -179,7 +216,7 @@ def fan_repair(name: str):
 # ---- Lights ----
 @router.get("/lights")
 def list_lights():
-    return _client.list_lights()
+    return _safe_list("lights", _client.list_lights)
 
 
 @router.post("/lights/{name}/on", status_code=201)
@@ -205,10 +242,10 @@ def light_group_off(group: str):
 # ---- Penalties ----
 @router.get("/penalties")
 def list_penalties():
-    return db.list_penalties()
+    return [_penalty_view(row) for row in db.list_penalties()]
 
 
 # ---- Zones ----
 @router.get("/zones")
 def list_zones():
-    return _client.list_zones()
+    return _safe_list("zones", _client.list_zones)

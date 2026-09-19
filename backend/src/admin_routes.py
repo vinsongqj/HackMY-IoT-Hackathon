@@ -1,38 +1,89 @@
 # admin_routes.py — reads from your existing db.py, doesn't modify it
-from datetime import datetime
+import logging
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends
 
 import auth
 import db
+from simulator_client import SimulatorClient
+
+logger = logging.getLogger("parking.admin_routes")
 
 router = APIRouter(prefix="/api/admin", dependencies=[Depends(auth.require_admin)])
+
+_client: SimulatorClient | None = None
+_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="admin-stats")
+
+
+def init(client: SimulatorClient) -> None:
+    global _client
+    _client = client
+
+
+def _live_occupancy() -> tuple[int, int]:
+    """(current occupied Park spots, total Park spots) read straight from the simulator -
+    the cars table accumulates stale 'parked' rows across test runs and can't be trusted for this."""
+    try:
+        spots = _client.list_parking_spots()
+    except Exception:
+        logger.warning("Failed to read live spot occupancy from simulator", exc_info=True)
+        return 0, 0
+    park_spots = [s for s in spots if s.get("purpose") == "Park"]
+    occupied = sum(1 for s in park_spots if s.get("detectedCars"))
+    return occupied, len(park_spots)
 
 
 @router.get("/stats")
 def stats():
-    cars = db.list_cars()
-    penalties = db.list_penalties(limit=10_000)
+    cars_f = _executor.submit(db.list_cars)
+    penalties_f = _executor.submit(db.list_penalties, 10_000)
+    occupancy_f = _executor.submit(_live_occupancy)
+
+    cars = cars_f.result()
+    penalties = penalties_f.result()
 
     validated = [c for c in cars if c.get("payment_valid") is True]
-    total_revenue = sum(float(c.get("paid_amount") or 0) for c in validated)
-    parked = [c for c in cars if c.get("status") == "parked"]
 
-    today = datetime.now().strftime("%Y-%m-%d")
-    today_arrivals = sum(1 for c in cars if (c.get("entry_time") or "").startswith(today))
+    def _revenue_since(cutoff: datetime) -> float:
+        total = 0.0
+        for c in validated:
+            updated_at = c.get("updated_at")
+            if not updated_at:
+                continue
+            try:
+                ts = datetime.fromisoformat(updated_at.replace("Z", "+00:00")).replace(tzinfo=None)
+            except ValueError:
+                continue
+            if ts >= cutoff:
+                total += float(c.get("paid_amount") or 0)
+        return total
+
+    now = datetime.now()
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = today_start - timedelta(days=now.weekday())
+    month_start = today_start.replace(day=1)
+
+    total_revenue = sum(float(c.get("paid_amount") or 0) for c in validated)
+
+    today_str = now.strftime("%Y-%m-%d")
+    today_arrivals = sum(1 for c in cars if (c.get("entry_time") or "").startswith(today_str))
+
+    current_occupied, capacity = occupancy_f.result()
 
     return {
         "revenue": {
             "total": total_revenue,
-            "today": total_revenue,
-            "thisWeek": total_revenue,
-            "thisMonth": total_revenue,
+            "today": _revenue_since(today_start),
+            "thisWeek": _revenue_since(week_start),
+            "thisMonth": _revenue_since(month_start),
         },
         "occupancy": {
-            "current": len(parked),
-            "capacity": 20,
+            "current": current_occupied,
+            "capacity": capacity,
             "today": today_arrivals,
-            "peakToday": len(parked),
+            "peakToday": current_occupied,
         },
         "penalties": {
             "count": len(penalties),
