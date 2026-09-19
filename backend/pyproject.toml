@@ -11,4 +11,5 @@ dependencies = [
     "pydantic>=2.13.5",
     "requests>=2.34.2",
     "uvicorn>=0.53.0",
+    "websockets>=13.0",
 ]
