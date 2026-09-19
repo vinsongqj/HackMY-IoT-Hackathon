@@ -29,7 +29,7 @@ export interface ParkingSpot extends ComponentState {
 }
 
 // ---------- Car ----------
-export type CarType = "Normal" | "Fuel" | string;
+export type CarType = "Electric" | "Fuel";
 
 export type PaymentStatus =
   | "None"
@@ -73,7 +73,7 @@ export interface Light {
 }
 
 // ---------- Zone ----------
-export type RiskLevel = "Safe" | "Mid" | "High" | "Critical" | string;
+export type RiskLevel = "Safe" | "Low" | "Moderate" | "High";
 
 export interface Zone {
   name: string;
@@ -82,11 +82,20 @@ export interface Zone {
 }
 
 // ---------- Penalty ----------
-export type PenaltyType = string;
+export type PenaltyType =
+  | "WrongSpotType"
+  | "OccupiedSpot"
+  | "ChargedTwice"
+  | "ChargedNonElectric"
+  | "OperatedBroken"
+  | "OperatedUnderMaintenance"
+  | "RepairedInUse"
+  | "InvalidPayment"
+  | "MissedExitPayment";
 
 export interface Penalty {
   id: string;
-  type: string;
+  type: PenaltyType;
   component: string;
   plate: string | null;
   fineAmount: number;

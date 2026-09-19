@@ -1,25 +1,29 @@
 // src/useEvents.ts
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { SimEvent } from "./types";
 
-export function useEvents(): SimEvent[] {
-  const [events] = useState<SimEvent[]>([]);
-  // Backend not wired yet — return empty stream.
-  // When ready, uncomment the WebSocket code below.
+export function useEvents() {
+  const [events, setEvents] = useState<SimEvent[]>([]);
+  const wsRef = useRef<WebSocket | null>(null);
 
-  /*
   useEffect(() => {
     const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/events`;
     const ws = new WebSocket(url);
+    wsRef.current = ws;
+
     ws.onmessage = (msg) => {
       try {
         const event = JSON.parse(msg.data) as SimEvent;
         setEvents((prev) => [event, ...prev].slice(0, 500));
-      } catch {}
+      } catch (e) {
+        console.warn("Bad WS payload:", msg.data);
+      }
     };
+
+    ws.onerror = (e) => console.warn("WS error", e);
+
     return () => ws.close();
   }, []);
-  */
 
   return events;
 }
