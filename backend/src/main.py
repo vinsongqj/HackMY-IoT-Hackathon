@@ -46,6 +46,11 @@ async def _open_all_gates_when_ready() -> None:
         except Exception:
             await asyncio.sleep(GATE_OPEN_RETRY_SECONDS)
             continue
+        if not barriers:
+            # The simulator's API can come up before its level/barriers are loaded -
+            # a successful-but-empty response isn't "done", keep waiting.
+            await asyncio.sleep(GATE_OPEN_RETRY_SECONDS)
+            continue
         for barrier in barriers:
             try:
                 await run_in_threadpool(client.open_gate, barrier["name"])
