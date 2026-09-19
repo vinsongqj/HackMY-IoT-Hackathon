@@ -28,8 +28,8 @@ export function CarCard({ car, onIssueInvoice, onValidatePayment, onSendExit }: 
 
       {car.invoice && (
         <>
-          <div className="tile-row">Parking: ${car.invoice.parkingCost.toFixed(2)}</div>
-          <div className="tile-row">Charging: ${car.invoice.chargingCost.toFixed(2)}</div>
+          <div className="tile-row">Parking: RM {car.invoice.parkingCost.toFixed(2)}</div>
+          <div className="tile-row">Charging: RM {car.invoice.chargingCost.toFixed(2)}</div>
           <div className="tile-row" style={{ color: "var(--text)" }}>
             Total: <b>${car.invoice.total.toFixed(2)}</b>
           </div>

@@ -500,7 +500,7 @@ table.log td.mono {
   padding: 6px 10px;
 }
 .log-price:focus-within { border-color: var(--accent); }
-.log-price-icon, .log-price-dash { color: var(--text-dim); font-size: 13px; }
+.log-price-icon, .log-price-dash { color: var(--text-dim); font-size: 13px; font-weight: 600;}
 .log-price input {
   border: 0; background: transparent; outline: none;
   color: var(--text); font-size: 13px;

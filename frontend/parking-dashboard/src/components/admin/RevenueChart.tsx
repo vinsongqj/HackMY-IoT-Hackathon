@@ -41,6 +41,7 @@ export function RevenueChart({ data }: { data: RevenuePoint[] }) {
           }}
           labelStyle={{ color: "#7d829a" }}
           labelFormatter={(t) => new Date(t).toLocaleString()}
+          formatter={(value: number) => [`RM ${value.toFixed(2)}`, "Amount"]}
         />
         <Area type="monotone" dataKey="amount" stroke="#6c5ce7" fill="url(#rev)" />
       </AreaChart>

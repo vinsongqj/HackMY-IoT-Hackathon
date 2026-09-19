@@ -31,8 +31,8 @@ export function AdminDashboard() {
   return (
     <div className="page">
       <div className="kpi-row">
-        <StatCard label="Total Revenue"    value={`$${stats.revenue.total.toFixed(2)}`} />
-        <StatCard label="Today's Revenue"  value={`$${stats.revenue.today.toFixed(2)}`} tone="green" />
+        <StatCard label="Total Revenue"    value={`RM ${stats.revenue.total.toFixed(2)}`} />
+        <StatCard label="Today's Revenue"  value={`RM ${stats.revenue.today.toFixed(2)}`} tone="green" />
         <StatCard
           label="Current Occupancy"
           value={`${stats.occupancy.current}/${stats.occupancy.capacity}`}
@@ -40,10 +40,10 @@ export function AdminDashboard() {
           tone="blue"
         />
         <StatCard label="Today's Arrivals" value={stats.occupancy.today} />
-        <StatCard label="This Week"        value={`$${stats.revenue.thisWeek.toFixed(2)}`} />
-        <StatCard label="This Month"       value={`$${stats.revenue.thisMonth.toFixed(2)}`} />
+        <StatCard label="This Week"        value={`RM ${stats.revenue.thisWeek.toFixed(2)}`} />
+        <StatCard label="This Month"       value={`RM ${stats.revenue.thisMonth.toFixed(2)}`} />
         <StatCard label="Penalties"        value={stats.penalties.count} tone="red" />
-        <StatCard label="Losses"           value={`$${stats.penalties.totalAmount.toFixed(2)}`} tone="red" />
+        <StatCard label="Losses"           value={`RM ${stats.penalties.totalAmount.toFixed(2)}`} tone="red" />
       </div>
 
       <div className="widget-grid">

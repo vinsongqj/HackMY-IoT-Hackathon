@@ -7,7 +7,7 @@ export function PenaltyRow({ penalty }: { penalty: Penalty }) {
       <td><Badge tone="red">PENALTY</Badge></td>
       <td className="mono">{penalty.component || "—"}</td>
       <td className="mono">{penalty.plate ?? "—"}</td>
-      <td>${penalty.fineAmount.toFixed(2)}</td>
+      <td>RM {penalty.fineAmount.toFixed(2)}</td>
       <td>{penalty.reason}</td>
       <td className="muted">
         {new Date(penalty.occurredAt).toLocaleTimeString()}

@@ -189,7 +189,7 @@ export function LogTable({ logs }: { logs: RequestLog[] }) {
         </select>
 
         <div className="log-price">
-          <span className="log-price-icon">$</span>
+          <span className="log-price-icon">RM </span>
           <input
             type="number"
             value={priceMin}
@@ -256,7 +256,7 @@ export function LogTable({ logs }: { logs: RequestLog[] }) {
                 </td>
                 <td className="mono">{l.plate ?? "—"}</td>
                 <td className="mono">{l.component ?? "—"}</td>
-                <td>{l.amount != null ? `$${l.amount.toFixed(2)}` : "—"}</td>
+                <td>{l.amount != null ? `RM ${l.amount.toFixed(2)}` : "—"}</td>
                 <td className="muted" style={{ fontSize: 11 }}>
                   {Object.keys(l.metadata ?? {}).length > 0
                     ? Object.entries(l.metadata)
