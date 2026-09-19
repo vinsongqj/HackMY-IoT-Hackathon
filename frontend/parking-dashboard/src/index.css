@@ -292,7 +292,9 @@ button, input, select, textarea {
 }
 .widget-title { font-size: 14px; font-weight: 600; color: var(--text); }
 .widget-sub   { color: var(--text-dim); font-size: 12px; }
-.widget-body  { flex: 1; min-width: 0; }
+.widget-body  { flex: 1; min-width: 0; align-content: start; }
+.widget-body.scroll { max-height: 480px; overflow-y: auto; }
+.table-wrap.scroll { max-height: 420px; overflow-y: auto; }
 
 .col-3  { grid-column: span 3; }
 .col-4  { grid-column: span 4; }
