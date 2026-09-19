@@ -1,9 +1,9 @@
 # admin_routes.py — reads from your existing db.py, doesn't modify it
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 import auth
 import db
@@ -47,32 +47,27 @@ def stats():
     validated = [c for c in cars if c.get("payment_valid") is True]
 
     def _revenue_since(cutoff: datetime) -> float:
-        # updated_at from Supabase is always UTC - cutoff must stay UTC too, or a
-        # payment made "today" in local time can land on the wrong side of midnight
-        # and silently vanish from every window except "total".
         total = 0.0
         for c in validated:
             updated_at = c.get("updated_at")
             if not updated_at:
                 continue
             try:
-                ts = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+                ts = datetime.fromisoformat(updated_at.replace("Z", "+00:00")).replace(tzinfo=None)
             except ValueError:
                 continue
             if ts >= cutoff:
                 total += float(c.get("paid_amount") or 0)
         return total
 
-    now_utc = datetime.now(timezone.utc)
-    today_start = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-    week_start = today_start - timedelta(days=now_utc.weekday())
+    now = datetime.now()
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = today_start - timedelta(days=now.weekday())
     month_start = today_start.replace(day=1)
 
     total_revenue = sum(float(c.get("paid_amount") or 0) for c in validated)
 
-    # entry_time comes from the simulator's ServerDateTime as a local-naive string
-    # (no timezone), unlike updated_at above - compare against local, not UTC, "today".
-    today_str = datetime.now().strftime("%Y-%m-%d")
+    today_str = now.strftime("%Y-%m-%d")
     today_arrivals = sum(1 for c in cars if (c.get("entry_time") or "").startswith(today_str))
 
     current_occupied, capacity = occupancy_f.result()
@@ -142,11 +137,130 @@ def logs(page: int = 1, pageSize: int = 50):
     return {"items": items[start:start + pageSize], "page": page, "pageSize": pageSize, "total": total}
 
 
-@router.get("/revenue")
-def revenue(from_: str = "", to: str = "", bucket: str = "hour"):
-    return []
+# ---------------------------------------------------------------------------
+# Time-series helpers
+# ---------------------------------------------------------------------------
 
+def _parse_iso_local(value: str) -> datetime | None:
+    """Parse a (possibly timezone-aware) ISO timestamp and normalise it to a
+    naive *local* datetime — matches what the rest of this module does with
+    `datetime.now()` and the simulator's `YYYY-MM-DD HH:MM:SS` strings."""
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone().replace(tzinfo=None)
+    return dt
+
+
+def _parse_server_dt(value: str) -> datetime | None:
+    """Simulator timestamps are plain 'YYYY-MM-DD HH:MM:SS' strings."""
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def _floor_bucket(dt: datetime, bucket: str) -> datetime:
+    if bucket == "day":
+        return dt.replace(hour=0, minute=0, second=0, microsecond=0)
+    return dt.replace(minute=0, second=0, microsecond=0)
+
+
+def _next_bucket(dt: datetime, bucket: str) -> datetime:
+    return dt + (timedelta(days=1) if bucket == "day" else timedelta(hours=1))
+
+
+def _bucket_range(start: datetime, end: datetime, bucket: str) -> list[datetime]:
+    out: list[datetime] = []
+    cursor = _floor_bucket(start, bucket)
+    while cursor <= end:
+        out.append(cursor)
+        cursor = _next_bucket(cursor, bucket)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Revenue series — bucket validated payments by hour/day from the `cars` table
+# ---------------------------------------------------------------------------
+
+@router.get("/revenue")
+def revenue(
+    from_: str = Query("", alias="from"),
+    to: str = Query("", alias="to"),
+    bucket: str = "hour",
+):
+    end = _parse_iso_local(to)
+    start = _parse_iso_local(from_)
+    if end is None:
+        end = datetime.now()
+    if start is None:
+        start = end - timedelta(hours=24)
+    if bucket not in ("hour", "day"):
+        bucket = "hour"
+
+    buckets: dict[datetime, float] = {b: 0.0 for b in _bucket_range(start, end, bucket)}
+
+    for c in db.list_cars():
+        if c.get("payment_valid") is not True:
+            continue
+        ts = _parse_iso_local(c.get("updated_at") or "")
+        if ts is None or ts < start or ts > end:
+            continue
+        key = _floor_bucket(ts, bucket)
+        if key in buckets:
+            buckets[key] += float(c.get("paid_amount") or 0)
+
+    return [
+        {"ts": k.isoformat(), "amount": round(v, 2)}
+        for k, v in sorted(buckets.items())
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Occupancy series — reconstruct from each visit's [entry_time, exit_time] window.
+# A visit is "occupying a spot" at time T iff entry_time <= T and (exit_time is
+# null OR exit_time > T). exit_time being null means the car hasn't left yet.
+# ---------------------------------------------------------------------------
 
 @router.get("/occupancy")
-def occupancy(from_: str = "", to: str = "", bucket: str = "hour"):
-    return []
+def occupancy(
+    from_: str = Query("", alias="from"),
+    to: str = Query("", alias="to"),
+    bucket: str = "hour",
+):
+    end = _parse_iso_local(to)
+    start = _parse_iso_local(from_)
+    if end is None:
+        end = datetime.now()
+    if start is None:
+        start = end - timedelta(hours=24)
+    if bucket not in ("hour", "day"):
+        bucket = "hour"
+
+    intervals: list[tuple[datetime, datetime | None]] = []
+    for c in db.list_cars():
+        entry = _parse_server_dt(c.get("entry_time") or "")
+        if entry is None:
+            continue
+        exit_dt = _parse_server_dt(c.get("exit_time") or "")
+        # Drop visits that don't overlap the requested window at all.
+        if entry > end:
+            continue
+        if exit_dt is not None and exit_dt < start:
+            continue
+        intervals.append((entry, exit_dt))
+
+    points = []
+    for b in _bucket_range(start, end, bucket):
+        occupied = sum(
+            1 for entry, exit_dt in intervals
+            if entry <= b and (exit_dt is None or exit_dt > b)
+        )
+        points.append({"ts": b.isoformat(), "occupied": occupied})
+    return points
