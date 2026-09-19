@@ -8,15 +8,15 @@ install:
 run:
 	@echo "Running front and back end..."
 	@cd backend && uv run uvicorn main:app --port 8000 --app-dir src --reload & \
-	@cd frontend && npm run dev
+	cd frontend && npm run dev
 
 front:
 	@echo "Running front end..."
-	@cd frontend && npm run dev
+	@cd frontend && npm install && npm run dev
 
 back:
 	@echo "Running back end..."
-	@cd backend && uv run uvicorn main:app --port 8000 --app-dir src --reload
+	@cd backend && uv sync && uv run uvicorn main:app --port 8000 --app-dir src --reload
 
 clean:
 	@echo "Cleaning build files..."

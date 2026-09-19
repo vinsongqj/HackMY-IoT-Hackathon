@@ -9,7 +9,7 @@ export function Sidebar() {
     <aside className="sidebar">
       <div className="sidebar-logo">
         <div className="sidebar-logo-mark">🚗</div>
-        <span>Park Sim</span>
+        <span>ParkFlow</span>
       </div>
 
       <div className="sidebar-section">Menu</div>
@@ -18,7 +18,7 @@ export function Sidebar() {
         to="/operator"
         className={({ isActive }) => `sidebar-link ${isActive ? "active" : ""}`}
       >
-        <span className="icon">🎛️</span>
+        <span className="icon">👷</span>
         <span>Operator</span>
       </NavLink>
 
@@ -27,7 +27,7 @@ export function Sidebar() {
           to="/admin"
           className={({ isActive }) => `sidebar-link ${isActive ? "active" : ""}`}
         >
-          <span className="icon">📊</span>
+          <span className="icon">🛠️</span>
           <span>Admin</span>
         </NavLink>
       )}
