@@ -3,15 +3,44 @@ from datetime import datetime
 
 from fastapi import FastAPI, Request
 
-import backend.src.config as config
-from backend.src.simulator_client import SimulatorClient
-from backend.src.webhook_security import verify_signature
+import config
+from level_layout import find_entry_exit_gates
+from simulator_client import SimulatorClient
+from webhook_security import compute_signature, verify_signature
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("parking")
 
 app = FastAPI()
 client = SimulatorClient(config.SIMULATOR_BASE_URL, config.SIMULATOR_USERNAME, config.SIMULATOR_PASSWORD)
+
+ENTRY_GATE, EXIT_GATE = find_entry_exit_gates()
+logger.info("Entry gate: %s, Exit gate: %s", ENTRY_GATE, EXIT_GATE)
+
+entry_gate_occupants: set[str] = set()
+exit_gate_occupants: set[str] = set()
+
+
+def open_gate_for(gate_name: str | None, occupants: set[str], plate: str) -> None:
+    if gate_name is None:
+        return
+    occupants.add(plate)
+    try:
+        client.open_gate(gate_name)
+    except Exception:
+        logger.exception("Failed to open gate %s", gate_name)
+
+
+def close_gate_for(gate_name: str | None, occupants: set[str], plate: str) -> None:
+    if gate_name is None:
+        return
+    occupants.discard(plate)
+    if occupants:
+        return
+    try:
+        client.close_gate(gate_name)
+    except Exception:
+        logger.exception("Failed to close gate %s", gate_name)
 
 processed_event_ids: set[str] = set()
 last_sequence_id: int | None = None
@@ -21,6 +50,7 @@ car_park_entry_time: dict[str, datetime] = {}
 car_car_type: dict[str, str] = {}
 car_pending_charge: dict[str, dict] = {}
 car_expected_payment: dict[str, float] = {}
+reserved_spots: set[str] = set()
 
 
 def parse_server_time(value: str) -> datetime:
@@ -36,6 +66,8 @@ def pick_free_spot(car_type: str) -> str | None:
             continue
         if spot["detectedCars"]:
             continue
+        if spot["name"] in reserved_spots:
+            continue
         if spot["parkingForCarType"] not in ("Any", car_type):
             continue
         return spot["name"]
@@ -49,6 +81,7 @@ def handle_car_spot_action(payload: dict) -> None:
     car_type = payload.get("CarType", "Normal")
 
     if spot_type == "EntrySpot" and direction == "CarIn":
+        open_gate_for(ENTRY_GATE, entry_gate_occupants, plate)
         car_car_type[plate] = car_type
         spot_name = pick_free_spot(car_type)
         if spot_name is None:
@@ -56,13 +89,18 @@ def handle_car_spot_action(payload: dict) -> None:
             client.car_goto(plate, "leavepark")
             return
         car_assigned_spot[plate] = spot_name
+        reserved_spots.add(spot_name)
         client.car_goto(plate, spot_name)
         logger.info("Routed %s to %s", plate, spot_name)
+
+    elif spot_type == "EntrySpot" and direction == "CarOut":
+        close_gate_for(ENTRY_GATE, entry_gate_occupants, plate)
 
     elif spot_type == "Park" and direction == "CarIn":
         car_park_entry_time[plate] = parse_server_time(payload["ServerDateTime"])
 
     elif spot_type == "Park" and direction == "CarOut":
+        reserved_spots.discard(car_assigned_spot.pop(plate, None))
         entry_time = car_park_entry_time.pop(plate, None)
         if entry_time is None:
             return
@@ -74,11 +112,15 @@ def handle_car_spot_action(payload: dict) -> None:
         client.car_goto(plate, "exit")
 
     elif spot_type == "ExitSpot" and direction == "CarIn":
+        open_gate_for(EXIT_GATE, exit_gate_occupants, plate)
         charge = car_pending_charge.pop(plate, None)
         if charge is None:
             return
         client.car_charge(plate, charge["parking_cost"], charge["charging_cost"])
         car_expected_payment[plate] = charge["parking_cost"] + charge["charging_cost"]
+
+    elif spot_type == "ExitSpot" and direction == "CarOut":
+        close_gate_for(EXIT_GATE, exit_gate_occupants, plate)
 
 
 def handle_payment_made(payload: dict) -> None:
@@ -135,8 +177,7 @@ async def webhook(request: Request):
     global last_sequence_id
     payload = await request.json()
 
-    if not verify_signature(payload):
-        from backend.src.webhook_security import compute_signature
+    if payload.get("Signature") and not verify_signature(payload):
         logger.warning(
             "Invalid signature on event %s | received=%s computed=%s | payload=%s",
             payload.get("EventId"),
