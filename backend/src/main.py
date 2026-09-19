@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import threading
+import time
 from datetime import datetime
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
@@ -95,14 +96,28 @@ last_sequence_id: int | None = None
 car_assigned_spot: dict[str, str] = {}
 car_park_entry_time: dict[str, datetime] = {}
 car_car_type: dict[str, str] = {}
+car_planned_duration: dict[str, int] = {}
 car_pending_charge: dict[str, dict] = {}
 car_expected_payment: dict[str, float] = {}
-reserved_spots: set[str] = set()
+reserved_spots: dict[str, float] = {}
+RESERVATION_TTL_SECONDS = 120
 _spot_lock = threading.Lock()
 
 
 def parse_server_time(value: str) -> datetime:
     return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+
+
+def _is_reserved(name: str) -> bool:
+    reserved_at = reserved_spots.get(name)
+    if reserved_at is None:
+        return False
+    if time.time() - reserved_at > RESERVATION_TTL_SECONDS:
+        # Release event for this reservation never got processed in time (e.g. under
+        # backlog) - don't let a stale reservation block a spot forever.
+        reserved_spots.pop(name, None)
+        return False
+    return True
 
 
 def pick_free_spot(car_type: str) -> str | None:
@@ -115,7 +130,7 @@ def pick_free_spot(car_type: str) -> str | None:
             continue
         if spot["detectedCars"]:
             continue
-        if name in reserved_spots:
+        if _is_reserved(name):
             continue
         if spot["parkingForCarType"] not in ("Any", car_type):
             continue
@@ -136,11 +151,12 @@ def handle_car_spot_action(payload: dict) -> None:
     if spot_type == "EntrySpot" and direction == "CarIn":
         open_gate_for(ENTRY_GATE, entry_gate_occupants, plate)
         car_car_type[plate] = car_type
+        car_planned_duration[plate] = int(payload.get("PlannedParkingDurationInMinutes", 1)) or 1
         with _spot_lock:
             spot_name = pick_free_spot(car_type)
             if spot_name is not None:
                 car_assigned_spot[plate] = spot_name
-                reserved_spots.add(spot_name)
+                reserved_spots[spot_name] = time.time()
         if spot_name is None:
             logger.warning("No free spot for %s, sending to leave", plate)
             client.car_goto(plate, "leavepark")
@@ -157,12 +173,13 @@ def handle_car_spot_action(payload: dict) -> None:
         db.upsert_car(plate, status="parked", entry_time=payload["ServerDateTime"])
 
     elif spot_type == "Park" and direction == "CarOut":
-        reserved_spots.discard(car_assigned_spot.pop(plate, None))
+        released_spot = car_assigned_spot.pop(plate, None)
+        if released_spot is not None:
+            reserved_spots.pop(released_spot, None)
         entry_time = car_park_entry_time.pop(plate, None)
         if entry_time is None:
             return
-        exit_time = parse_server_time(payload["ServerDateTime"])
-        minutes = max(1, int((exit_time - entry_time).total_seconds() // 60) or 1)
+        minutes = car_planned_duration.pop(plate, 1)
         parking_cost = minutes * config.PARKING_RATE_PER_MINUTE
         charging_cost = parking_cost if car_car_type.get(plate) == "Electric" else 0
         car_pending_charge[plate] = {"parking_cost": parking_cost, "charging_cost": charging_cost}
