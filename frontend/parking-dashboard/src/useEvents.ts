@@ -1,4 +1,3 @@
-// src/useEvents.ts
 import { useEffect, useRef, useState } from "react";
 import type { SimEvent } from "./types";
 
@@ -20,7 +19,8 @@ export function useEvents() {
       }
     };
 
-    ws.onerror = (e) => console.warn("WS error", e);
+    ws.onerror = () => { /* silent */ };
+    ws.onclose = () => { /* silent */ };
 
     return () => ws.close();
   }, []);

@@ -1,4 +1,3 @@
-// src/api.http.ts
 export async function http<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     headers: { "Content-Type": "application/json" },

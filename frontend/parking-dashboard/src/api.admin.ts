@@ -1,4 +1,3 @@
-// src/api.admin.ts
 import { http } from "./api.http";
 import type {
   AdminStats, LogPage, LogType,
