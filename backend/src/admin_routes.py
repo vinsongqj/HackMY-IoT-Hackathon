@@ -1,7 +1,7 @@
 # admin_routes.py — reads from your existing db.py, doesn't modify it
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends
 
@@ -47,27 +47,32 @@ def stats():
     validated = [c for c in cars if c.get("payment_valid") is True]
 
     def _revenue_since(cutoff: datetime) -> float:
+        # updated_at from Supabase is always UTC - cutoff must stay UTC too, or a
+        # payment made "today" in local time can land on the wrong side of midnight
+        # and silently vanish from every window except "total".
         total = 0.0
         for c in validated:
             updated_at = c.get("updated_at")
             if not updated_at:
                 continue
             try:
-                ts = datetime.fromisoformat(updated_at.replace("Z", "+00:00")).replace(tzinfo=None)
+                ts = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
             except ValueError:
                 continue
             if ts >= cutoff:
                 total += float(c.get("paid_amount") or 0)
         return total
 
-    now = datetime.now()
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    week_start = today_start - timedelta(days=now.weekday())
+    now_utc = datetime.now(timezone.utc)
+    today_start = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = today_start - timedelta(days=now_utc.weekday())
     month_start = today_start.replace(day=1)
 
     total_revenue = sum(float(c.get("paid_amount") or 0) for c in validated)
 
-    today_str = now.strftime("%Y-%m-%d")
+    # entry_time comes from the simulator's ServerDateTime as a local-naive string
+    # (no timezone), unlike updated_at above - compare against local, not UTC, "today".
+    today_str = datetime.now().strftime("%Y-%m-%d")
     today_arrivals = sum(1 for c in cars if (c.get("entry_time") or "").startswith(today_str))
 
     current_occupied, capacity = occupancy_f.result()
