@@ -1,0 +1,75 @@
+/* src/index.css */
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, sans-serif;
+  background: #f5f5f5;
+  color: #222;
+}
+
+.dashboard { max-width: 1200px; margin: 0 auto; padding: 24px; }
+.dash-header { display: flex; justify-content: space-between; align-items: baseline; }
+.dash-section { margin-top: 32px; }
+.dash-section h2 { font-size: 18px; margin-bottom: 12px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+
+.card {
+  background: white;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.card-title { font-weight: 600; font-size: 15px; }
+.card-row { font-size: 13px; color: #555; }
+.card-tags { display: flex; gap: 4px; margin-top: 6px; flex-wrap: wrap; }
+.card-actions { margin-top: 8px; display: flex; gap: 6px; }
+
+.tag {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: white;
+  background: #888;
+}
+.tag.red    { background: #d33; }
+.tag.orange { background: #e67e22; }
+.tag.blue   { background: #2b7fd4; }
+.tag.gray   { background: #bbb; }
+.tag.yellow { background: #c9a600; }
+.tag.green  { background: #2a9d46; }
+
+.tone-red    { border-left: 4px solid #d33; }
+.tone-orange { border-left: 4px solid #e67e22; }
+.tone-yellow { border-left: 4px solid #c9a600; }
+.tone-green  { border-left: 4px solid #2a9d46; }
+
+button {
+  padding: 6px 10px;
+  border: 1px solid #ccc;
+  background: #fafafa;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+}
+button:hover:not(:disabled) { background: #eee; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.event-log {
+  background: #1e1e1e;
+  color: #ddd;
+  padding: 12px;
+  border-radius: 8px;
+  max-height: 240px;
+  overflow-y: auto;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+}
+.event-row { display: flex; gap: 8px; padding: 2px 0; }
+.event-type { color: #7fd4ff; font-weight: 600; }
+.event-detail { color: #aaa; }
+
+.muted { color: #888; font-size: 13px; }
+.loading { padding: 40px; text-align: center; color: #666; }
