@@ -166,6 +166,23 @@ def _is_reserved(name: str) -> bool:
     return True
 
 
+def _safe_car_goto(plate: str, destination: str) -> None:
+    try:
+        client.car_goto(plate, destination)
+    except Exception:
+        # simulator_client already retries transient failures - if it still raises
+        # here, log it but never let it abort the rest of the handler (DB bookkeeping,
+        # dedup/sequence tracking), or the whole webhook gets silently dropped too.
+        logger.exception("Failed to send %s to %s", plate, destination)
+
+
+def _safe_car_charge(plate: str, parking_cost: float, charging_cost: float) -> None:
+    try:
+        client.car_charge(plate, parking_cost, charging_cost)
+    except Exception:
+        logger.exception("Failed to charge %s", plate)
+
+
 def pick_free_spot(car_type: str) -> str | None:
     live_by_name = {spot["name"]: spot for spot in client.list_parking_spots()}
     for name in SPOTS_BY_DISTANCE:
@@ -197,16 +214,24 @@ def handle_car_spot_action(payload: dict) -> None:
     if spot_type == "EntrySpot" and direction == "CarIn":
         car_car_type[plate] = car_type
         car_planned_duration[plate] = int(payload.get("PlannedParkingDurationInMinutes", 1)) or 1
-        with _spot_lock:
-            spot_name = pick_free_spot(car_type)
-            if spot_name is not None:
-                car_assigned_spot[plate] = spot_name
-                reserved_spots[spot_name] = time.time()
+        try:
+            with _spot_lock:
+                spot_name = pick_free_spot(car_type)
+                if spot_name is not None:
+                    car_assigned_spot[plate] = spot_name
+                    reserved_spots[spot_name] = time.time()
+        except Exception:
+            # A live simulator call failing here must never strand the car with zero
+            # commands issued - fall back to the same "no free spot" rejection path,
+            # which still sends it somewhere, instead of letting the exception abort
+            # the whole handler silently.
+            logger.exception("Failed to check spot availability for %s, sending to leave", plate)
+            spot_name = None
         if spot_name is None:
             logger.warning("No free spot for %s, sending to leave", plate)
-            client.car_goto(plate, "leavepark")
+            _safe_car_goto(plate, "leavepark")
             return
-        client.car_goto(plate, spot_name)
+        _safe_car_goto(plate, spot_name)
         visit_id = db.create_visit(plate, car_type=car_type, status="entering", assigned_spot=spot_name)
         car_visit_id[plate] = visit_id
         if visit_id is not None:
@@ -230,7 +255,7 @@ def handle_car_spot_action(payload: dict) -> None:
         parking_cost = minutes * config.PARKING_RATE_PER_MINUTE
         charging_cost = parking_cost if car_car_type.get(plate) == "Electric" else 0
         car_pending_charge[plate] = {"parking_cost": parking_cost, "charging_cost": charging_cost}
-        client.car_goto(plate, "exit")
+        _safe_car_goto(plate, "exit")
         visit_id = car_visit_id.get(plate)
         if visit_id is not None:
             db.update_visit(
@@ -246,7 +271,7 @@ def handle_car_spot_action(payload: dict) -> None:
         charge = car_pending_charge.pop(plate, None)
         if charge is None:
             return
-        client.car_charge(plate, charge["parking_cost"], charge["charging_cost"])
+        _safe_car_charge(plate, charge["parking_cost"], charge["charging_cost"])
         car_expected_payment[plate] = charge["parking_cost"] + charge["charging_cost"]
         visit_id = car_visit_id.get(plate)
         if visit_id is not None:
@@ -268,7 +293,7 @@ def handle_payment_made(payload: dict) -> None:
         logger.warning("Payment mismatch for %s: expected %s, got %s", plate, expected, amount)
     else:
         logger.info("Payment confirmed for %s: %s", plate, amount)
-        client.car_goto(plate, "leavepark")
+        _safe_car_goto(plate, "leavepark")
     if visit_id is not None:
         db.update_visit(visit_id, status="left", paid_amount=amount, payment_valid=valid)
         db.remove_slot(visit_id)

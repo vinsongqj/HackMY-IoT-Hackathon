@@ -1,3 +1,5 @@
+import time
+
 import requests
 
 
@@ -25,12 +27,28 @@ class SimulatorClient:
 
     def _request(self, method: str, path: str, **kwargs) -> requests.Response:
         url = f"{self.base_url}{path}"
-        resp = requests.request(method, url, headers=self._headers(), timeout=10, **kwargs)
-        if resp.status_code == 401:
-            self.login()
+
+        def attempt() -> requests.Response:
             resp = requests.request(method, url, headers=self._headers(), timeout=10, **kwargs)
-        resp.raise_for_status()
-        return resp
+            if resp.status_code == 401:
+                self.login()
+                resp = requests.request(method, url, headers=self._headers(), timeout=10, **kwargs)
+            resp.raise_for_status()
+            return resp
+
+        # The simulator's local API resets/times out under load - a car whose
+        # goto/charge command hits a single dropped connection would otherwise be
+        # stranded at that exact point in its lifecycle forever, since nothing else
+        # ever retries it. A couple of short retries covers that without much cost.
+        last_exc: Exception | None = None
+        for delay in (0, 0.3, 0.8):
+            if delay:
+                time.sleep(delay)
+            try:
+                return attempt()
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+                last_exc = exc
+        raise last_exc
 
     def list_parking_spots(self) -> list[dict]:
         return self._request("GET", "/api/v1/list-parking-spots").json()
