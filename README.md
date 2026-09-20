@@ -30,7 +30,7 @@
 5. Run the simulator (`ParkingSimulator.exe`) alongside it.
 
 ## Project Structure
-
+```mermaid
 flowchart TD
 
 subgraph group_frontend["Frontend Dashboard"]
@@ -128,3 +128,4 @@ class node_backend_api,node_auth_service,node_operator_routes,node_admin_routes,
 class node_event_automation,node_simulator_adapter,node_event_mapping,node_gate_state toneMint
 class node_database toneRose
 class node_admin_actor,node_simulator toneIndigo
+```
