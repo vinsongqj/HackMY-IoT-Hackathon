@@ -4,6 +4,14 @@ Parkflow is an automated parking guidance system with a web-based dashboard to c
 
 Developed for Track 2 of the HackMY IoT hackathon (organized by La French Tech Malaysia, MyEvolution, and IEMMSS Monash), the system addresses parking mobility challenges. The track required teams to consume webhooks from a live parking simulation executable via REST APIs to optimize ingress and egress traffic flows. Additionally, the dashboard implements role-based access control (RBAC) to provide distinct access levels for operator and admin roles, allowing them to manually intervene and control IoT devices like lights, exhaust fans and barrier gates. Repair status of these devices is also tracked, to notify the operator in the case of a device breaking down.
 
+## Requirements
+
+* Python 3.10+
+* uv
+* Node.js and npm
+* Supabase
+* Parking Simulator (not included in this repository)
+
 ## Setup
 
 1. Download/unzip the Parking Simulator and place the `ParkingSimulator-win/linux-x64` folder directly at the **repo root** (as a sibling of `backend/` and `frontend/`). It's gitignored, so this step is manual for everyone who clones the repository.
