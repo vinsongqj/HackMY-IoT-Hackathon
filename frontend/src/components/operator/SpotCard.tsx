@@ -15,31 +15,32 @@ export function SpotCard({ spot, onRepair, onSendCar }: Props) {
     spot.parkingForCarType === "Accessible" ? "yellow" : "gray";
 
   return (
-    <div className="tile">
-      <div className="tile-title">
-        <span>{spot.name}</span>
-        <Badge tone={occupied ? "red" : "green"}>
-          {occupied ? "OCCUPIED" : "VACANT"}
-        </Badge>
-      </div>
+    <div className="row-item">
+      <span className="row-item-name">{spot.name}</span>
 
-      <div className="tile-row">
+      <Badge tone={occupied ? "red" : "green"}>
+        {occupied ? "OCCUPIED" : "VACANT"}
+      </Badge>
+
+      <span className="row-item-meta">
         {spot.purpose} · Zone {spot.zoneParent}
-      </div>
+      </span>
 
-      <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+      <div className="row-item-badges">
         <Badge tone={typeTone}>{spot.parkingForCarType}</Badge>
         {spot.broken && <Badge tone="red">BROKEN</Badge>}
         {spot.isUnderMaintenance && <Badge tone="orange">MAINT</Badge>}
       </div>
 
       {occupied && (
-        <div className="tile-row" style={{ color: "var(--text)" }}>
+        <span className="row-item-meta" style={{ color: "var(--text)" }}>
           🚗 {spot.detectedCars} car{spot.detectedCars > 1 ? "s" : ""}
-        </div>
+        </span>
       )}
 
-      <div className="tile-actions">
+      <span className="row-item-spacer" />
+
+      <div className="row-item-actions">
         {onSendCar && spot.purpose === "Park" && (
           <Button
             disabled={occupied || spot.broken || spot.isUnderMaintenance}

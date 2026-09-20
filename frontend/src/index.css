@@ -334,6 +334,29 @@ button, input, select, textarea {
 .tile-row { font-size: 12.5px; color: var(--text-dim); }
 .tile-actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
 
+/* Single-line variant of .tile, for long scrollable lists where a grid of tall
+   cards would push most rows out of view. Same surface treatment as .tile. */
+.row-item {
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  transition: border-color 0.15s, background 0.15s;
+}
+.row-item:hover { background: var(--surface-hover); border-color: var(--border-strong); }
+.row-item-name {
+  font-weight: 600; font-size: 13.5px; color: var(--text);
+  min-width: 52px;
+}
+.row-item-meta { font-size: 12.5px; color: var(--text-dim); }
+.row-item-badges { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
+.row-item-spacer { flex: 1 1 auto; }
+.row-item-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
 /* ==================================================================
    Pill / Tag
    ================================================================== */

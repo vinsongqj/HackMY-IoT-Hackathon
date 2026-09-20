@@ -9,7 +9,7 @@ export function Sidebar() {
     <aside className="sidebar">
       <div className="sidebar-logo">
         <div className="sidebar-logo-mark">🚗</div>
-        <span>ParkFlow</span>
+        <span>Parkflow.</span>
       </div>
 
       <div className="sidebar-section">Menu</div>
