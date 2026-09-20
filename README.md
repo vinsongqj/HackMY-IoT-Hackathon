@@ -40,9 +40,19 @@ Both services are containerized and wired together with `docker compose`:
   `http://localhost:8080`. nginx reverse-proxies `/api` and `/ws` to the backend
   container, so the app stays same-origin (no CORS setup needed).
 
+The simulator's `settings/` folder is bind-mounted read-only into the backend
+container (see `volumes` in `docker-compose.yml`). It's gitignored, so it isn't in
+the image, but the backend needs `settings/lvl1.json` to know which spots exist —
+without it, every car is sent straight to the exit. If your folder isn't named
+`ParkingSimulator-linux-x64`, override the mount source with `SIMULATOR_FOLDER`:
+
+```
+SIMULATOR_FOLDER=./ParkingSimulator-win-x64 docker compose up --build
+```
+
 1. Create `backend/.env` (step 2 above) and fill in your Supabase credentials.
 
-2. Start the simulator on the host as usual, then build and run:
+2. Start the simulator on the host as usual (`make sim`), then build and run:
 
    ```
    docker compose up --build
@@ -66,5 +76,30 @@ Both services are containerized and wired together with `docker compose`:
 Because the backend publishes port 8000, the simulator's existing
 `WebhookUrl` of `http://localhost:8000/webhook` keeps working unchanged.
 
-Handy targets: `make docker-build`, `make docker-up`, `make docker-down`,
-`make docker-logs`.
+Handy targets: `make sim` (start the simulator), `make docker-build`,
+`make docker-up`, `make docker-down`, `make docker-logs`.
+
+### Troubleshooting: backend can't reach the simulator
+
+On Linux hosts whose firewall denies inbound traffic by default (e.g. `ufw` on
+Ubuntu / Pop!_OS), containers can talk to each other but **not** to services
+bound on the host. The backend then logs:
+
+```
+requests.exceptions.ConnectTimeout: HTTPConnectionPool(host='host.docker.internal', port=9898)
+```
+
+and operator/admin pages show no live simulator state, even though the simulator
+is running. Allow the Docker bridge subnets to reach the simulator's API port:
+
+```bash
+sudo ufw allow from 172.16.0.0/12 to any port 9898 proto tcp
+```
+
+The other direction is unaffected: the simulator → backend webhook targets a
+*published* container port, which the host can always reach.
+
+If you can't change the firewall, the alternative is to run the backend with
+`network_mode: host` so it reaches the simulator over loopback — but then the
+frontend must also use host networking (and proxy to `127.0.0.1:8000`), which
+trades away the container network isolation.

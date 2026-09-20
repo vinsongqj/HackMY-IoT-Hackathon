@@ -7,8 +7,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SIMULATOR_SETTINGS_FILE = REPO_ROOT / "ParkingSimulator-win-x64" / "settings" / "settings.json"
-LEVEL_LAYOUT_FILE = REPO_ROOT / "ParkingSimulator-win-x64" / "settings" / "lvl1.json"
+SIMULATOR_SETTINGS_FILE = REPO_ROOT / "ParkingSimulator-linux-x64" / "settings" / "settings.json"
+LEVEL_LAYOUT_FILE = REPO_ROOT / "ParkingSimulator-linux-x64" / "settings" / "lvl1.json"
 
 
 def _load_simulator_settings() -> dict:

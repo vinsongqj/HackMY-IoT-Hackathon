@@ -17,11 +17,13 @@ services:
     # can reach a simulator on the host via http://host.docker.internal:9898.
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    # Optional: let the container read the simulator's own settings file (for its
-    # ListenAddress / Name / Password) instead of relying on SIMULATOR_BASE_URL.
-    # Uncomment and point at wherever you unzipped the simulator:
-    # volumes:
-    #   - ./ParkingSimulator-win-x64/settings:/app/ParkingSimulator-win-x64/settings:ro
+    # The backend reads the level layout (settings/lvl1.json) and the simulator
+    # settings from ParkingSimulator-*/settings. That folder is gitignored, so it
+    # is not baked into the image - mount it read-only instead. Without lvl1.json
+    # the backend has no spots to route to and sends every car straight to exit.
+    # Point SIMULATOR_FOLDER elsewhere if your folder has a different name.
+    volumes:
+      - ${SIMULATOR_FOLDER:-./ParkingSimulator-linux-x64}/settings:/app/ParkingSimulator-linux-x64/settings:ro
     restart: unless-stopped
 
   frontend:
