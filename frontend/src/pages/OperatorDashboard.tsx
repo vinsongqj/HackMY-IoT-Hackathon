@@ -208,11 +208,7 @@ export function OperatorDashboard() {
             <div className="widget-title">Parking Spots</div>
             <div className="widget-sub">{occupied}/{spotsPark.length} occupied</div>
           </div>
-          <div className="widget-body scroll" style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
-            gap: 10,
-          }}>
+          <div className="widget-body scroll" style={{ display: "grid", gap: 6 }}>
             {snap.spots.map((s) => (
               <SpotCard
                 key={s.name}
