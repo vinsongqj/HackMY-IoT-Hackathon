@@ -78,19 +78,19 @@ export function AdminDashboard() {
       </div>
 
       <div className="widget-grid">
-        <div className="widget col-8">
+        <div className="widget col-12">
           <div className="widget-header">
             <div className="widget-title">Revenue (24h)</div>
           </div>
           <div className="widget-body"><RevenueChart data={revenue} /></div>
         </div>
 
-        <div className="widget col-4">
+        {/* <div className="widget col-4">
           <div className="widget-header">
             <div className="widget-title">Occupancy (24h)</div>
           </div>
           <div className="widget-body"><OccupancyChart data={occupancy} /></div>
-        </div>
+        </div> */}
 
         <div className="widget col-12">
           <div className="widget-header">
