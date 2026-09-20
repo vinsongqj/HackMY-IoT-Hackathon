@@ -20,8 +20,8 @@ export function AdminDashboard() {
     const to = new Date().toISOString();
 
     adminApi.getStats().then((s) => { setStats(s); setError(null); }).catch((e) => setError(String(e.message)));
-    adminApi.getRevenueSeries({ from, to, bucket: "hour" }).then(setRevenue).catch(() => {});
-    adminApi.getOccupancySeries({ from, to, bucket: "hour" }).then(setOccupancy).catch(() => {});
+    adminApi.getRevenueSeries({ from, to, bucket: "15min" }).then(setRevenue).catch(() => {});
+    adminApi.getOccupancySeries({ from, to, bucket: "15min" }).then(setOccupancy).catch(() => {});
 
     const q: LogQuery = { page: 1, pageSize: 50 };
     adminApi.getLogs(q).then((p) => setLogs(p.items)).catch(() => {});

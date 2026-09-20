@@ -29,12 +29,12 @@ export const adminApi = {
     return http<LogPage>(`/api/admin/logs${qs ? `?${qs}` : ""}`);
   },
 
-  getRevenueSeries: (params: { from: string; to: string; bucket?: "hour" | "day" }) => {
+  getRevenueSeries: (params: { from: string; to: string; bucket?: "15min" | "hour" | "day" }) => {
     const qs = new URLSearchParams(params as Record<string, string>).toString();
     return http<RevenuePoint[]>(`/api/admin/revenue?${qs}`);
   },
 
-  getOccupancySeries: (params: { from: string; to: string; bucket?: "hour" | "day" }) => {
+  getOccupancySeries: (params: { from: string; to: string; bucket?: "15min" | "hour" | "day" }) => {
     const qs = new URLSearchParams(params as Record<string, string>).toString();
     return http<OccupancyPoint[]>(`/api/admin/occupancy?${qs}`);
   },

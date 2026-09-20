@@ -14,7 +14,13 @@ export function OccupancyChart({ data }: { data: OccupancyPoint[] }) {
       <LineChart data={data}>
         <XAxis
           dataKey="ts"
-          tickFormatter={(t) => new Date(t).getHours() + "h"}
+          tickFormatter={(t) =>
+            new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+          }
+          // With 15-minute buckets a 24h window is ~96 points - the default category
+          // axis draws one tick per point, which overlaps into an unreadable smear.
+          // Thin it to roughly 8 evenly-spaced labels regardless of bucket size.
+          interval={Math.max(0, Math.ceil(data.length / 8) - 1)}
           stroke="#8a92a6"
           tick={{ fill: "#8a92a6", fontSize: 11 }}
           axisLine={{ stroke: "#e6e8f0" }}

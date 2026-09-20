@@ -177,11 +177,17 @@ def _parse_local_naive(value: str) -> datetime | None:
 def _floor_bucket(dt: datetime, bucket: str) -> datetime:
     if bucket == "day":
         return dt.replace(hour=0, minute=0, second=0, microsecond=0)
+    if bucket == "15min":
+        return dt.replace(minute=(dt.minute // 15) * 15, second=0, microsecond=0)
     return dt.replace(minute=0, second=0, microsecond=0)
 
 
 def _next_bucket(dt: datetime, bucket: str) -> datetime:
-    return dt + (timedelta(days=1) if bucket == "day" else timedelta(hours=1))
+    if bucket == "day":
+        return dt + timedelta(days=1)
+    if bucket == "15min":
+        return dt + timedelta(minutes=15)
+    return dt + timedelta(hours=1)
 
 
 def _bucket_range(start: datetime, end: datetime, bucket: str) -> list[datetime]:
@@ -205,10 +211,10 @@ def _bucket_range(start: datetime, end: datetime, bucket: str) -> list[datetime]
 def revenue(
     from_: str = Query("", alias="from"),
     to: str = Query("", alias="to"),
-    bucket: str = Query("hour"),
+    bucket: str = Query("15min"),
 ):
-    if bucket not in ("hour", "day"):
-        bucket = "hour"
+    if bucket not in ("15min", "hour", "day"):
+        bucket = "15min"
 
     end = _parse_utc_iso(to) or datetime.now(timezone.utc)
     start = _parse_utc_iso(from_) or (end - timedelta(hours=24))
@@ -251,10 +257,10 @@ def revenue(
 def occupancy(
     from_: str = Query("", alias="from"),
     to: str = Query("", alias="to"),
-    bucket: str = Query("hour"),
+    bucket: str = Query("15min"),
 ):
-    if bucket not in ("hour", "day"):
-        bucket = "hour"
+    if bucket not in ("15min", "hour", "day"):
+        bucket = "15min"
 
     end_utc = _parse_utc_iso(to) or datetime.now(timezone.utc)
     start_utc = _parse_utc_iso(from_) or (end_utc - timedelta(hours=24))
