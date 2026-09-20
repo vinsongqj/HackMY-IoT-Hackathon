@@ -1,12 +1,16 @@
 # Parkflow.
 
+Parkflow is an automated parking guidance system with a web-based dashboard to control and monitor IoT devices, visualize parking occupancy rate and calculate revenue generated. It utilizes TypeScript, React and Vite for the frontend, Python for the backend, Supabase for the database and Docker for containerization.
+
+Developed for Track 2 of the HackMY IoT hackathon (organized by La French Tech Malaysia, MyEvolution, and IEMMSS Monash), the system addresses parking mobility challenges. The track required teams to consume webhooks from a live parking simulation executable via REST APIs to optimize ingress and egress traffic flows. Additionally, the dashboard implements role-based access control (RBAC) to provide distinct access levels for operator and admin roles, allowing them to manually intervene and control IoT devices like lights, exhaust fans and barrier gates. Repair status of these devices is also tracked, to notify the operator in the case of a device breaking down.
+
 ## Setup
 
-1. Download/unzip the Park Simulator and place the `ParkingSimulator-win-x64` folder directly at the **repo root** (as a sibling of `backend/` and `frontend/`). It's gitignored, so this step is manual for everyone who clones the repo.
+1. Download/unzip the Parking Simulator and place the `ParkingSimulator-win/linux-x64` folder directly at the **repo root** (as a sibling of `backend/` and `frontend/`). It's gitignored, so this step is manual for everyone who clones the repository.
 
    The backend expects it at exactly this path:
    ```
-   hackmyiot/
+   HackMY-IoT-Hackathon/
    ├── ParkingSimulator-win-x64/
    │   ├── ParkingSimulator.exe
    │   └── settings/
@@ -28,6 +32,86 @@
    ```
 
 5. Run the simulator (`ParkingSimulator.exe`) alongside it.
+
+6. Run the frontend dashboard.
+  ```
+  cd frontend
+  npm install
+  npm run dev
+  ```
+7. Copy and paste the localhost URL or just press `o` and enter to open the webview.
+
+
+## Repository Structure
+```
+Directory structure:
+└── Hackmy-IoT-Hackathon/
+    ├── README.md
+    ├── Makefile
+    ├── backend/
+    │   ├── pyproject.toml
+    │   ├── .env.example
+    │   ├── scripts/
+    │   │   └── cleanup_db.py
+    │   └── src/
+    │       ├── admin_routes.py
+    │       ├── auth.py
+    │       ├── config.py
+    │       ├── db.py
+    │       ├── event_mapping.py
+    │       ├── gate_state.py
+    │       ├── level_layout.py
+    │       ├── main.py
+    │       ├── operator_routes.py
+    │       ├── simulator_client.py
+    │       ├── webhook_security.py
+    │       └── ws.py
+    └── frontend/
+        ├── index.html
+        ├── package.json
+        ├── vite.config.ts
+        ├── .oxlintrc.json
+        └── src/
+            ├── api.admin.ts
+            ├── api.auth.ts
+            ├── api.http.ts
+            ├── api.operator.ts
+            ├── App.tsx
+            ├── auth.ts
+            ├── AuthContext.tsx
+            ├── index.css
+            ├── main.tsx
+            ├── types.ts
+            ├── useEvents.ts
+            ├── useTheme.ts
+            ├── vite-env.d.ts
+            ├── components/
+            │   ├── admin/
+            │   │   ├── LogTable.tsx
+            │   │   ├── OccupancyChart.tsx
+            │   │   ├── RevenueChart.tsx
+            │   │   └── StatCard.tsx
+            │   ├── operator/
+            │   │   ├── BarrierCard.tsx
+            │   │   ├── CarCard.tsx
+            │   │   ├── FanCard.tsx
+            │   │   ├── LightCard.tsx
+            │   │   ├── PenaltyRow.tsx
+            │   │   ├── SpotCard.tsx
+            │   │   └── ZoneCard.tsx
+            │   └── ui/
+            │       ├── Badge.tsx
+            │       ├── Button.tsx
+            │       └── Card.tsx
+            ├── layout/
+            │   ├── Shell.tsx
+            │   ├── Sidebar.tsx
+            │   └── Topbar.tsx
+            └── pages/
+                ├── AdminDashboard.tsx
+                ├── LoginPage.tsx
+                └── OperatorDashboard.tsx
+```
 
 ## Project Structure
 ```mermaid
@@ -129,3 +213,7 @@ class node_event_automation,node_simulator_adapter,node_event_mapping,node_gate_
 class node_database toneRose
 class node_admin_actor,node_simulator toneIndigo
 ```
+
+## Disclosure of AI Usage
+
+AI was heavily used for this project due to the 30-hour time constraint to complete the hackathon, however, many fixes were also implemented by hand.
