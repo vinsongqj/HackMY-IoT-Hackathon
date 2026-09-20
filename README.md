@@ -4,6 +4,9 @@ Parkflow is an automated parking guidance system with a web-based dashboard to c
 
 Developed for Track 2 of the HackMY IoT hackathon (organized by La French Tech Malaysia, MyEvolution, and IEMMSS Monash), the system addresses parking mobility challenges. The track required teams to consume webhooks from a live parking simulation executable via REST APIs to optimize ingress and egress traffic flows. Additionally, the dashboard implements role-based access control (RBAC) to provide distinct access levels for operator and admin roles, allowing them to manually intervene and control IoT devices like lights, exhaust fans and barrier gates. Repair status of these devices is also tracked, to notify the operator in the case of a device breaking down.
 
+<img width="1025" height="527" alt="image" src="https://github.com/user-attachments/assets/988d98ba-7d6e-48f6-aed0-cd74d62e1503" />
+
+
 ## Requirements
 
 * Python 3.10+
