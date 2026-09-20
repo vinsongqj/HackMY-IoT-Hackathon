@@ -39,7 +39,7 @@ Developed for Track 2 of the HackMY IoT hackathon (organized by La French Tech M
     npm install
     npm run dev
      ```
-7. Copy and paste the localhost URL or just press `o` and enter to open the webview.
+7. Copy and paste the localhost URL or just press `o` and `enter` in the terminal where you ran the frontend to open the webview.
 
 
 ## Repository Structure
