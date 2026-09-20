@@ -80,6 +80,57 @@ export function OperatorDashboard() {
       </div>
 
       <div className="widget-grid">
+        <div className="widget col-12">
+          <div className="widget-header">
+            <div className="widget-title">Recent Penalties</div>
+            <div className="widget-sub">{snap.penalties.length}</div>
+          </div>
+          <div className="widget-body" style={{ padding: 0 }}>
+            <div className="table-wrap scroll">
+              <table className="log">
+                <thead>
+                  <tr>
+                    <th>Type</th>
+                    <th>Component</th>
+                    <th>Plate</th>
+                    <th>Fine</th>
+                    <th>Reason</th>
+                    <th>Time</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {snap.penalties.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="muted" style={{ textAlign: "center", padding: 24 }}>
+                        No penalties
+                      </td>
+                    </tr>
+                  )}
+                  {snap.penalties.map((p) => <PenaltyRow key={p.id} penalty={p} />)}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div className="widget col-12">
+          <div className="widget-header">
+            <div className="widget-title">Live Events</div>
+            <div className="widget-sub">{events.length} received</div>
+          </div>
+          <div className="widget-body">
+            <div className="event-log">
+              {events.length === 0 && <div className="muted">Waiting for events…</div>}
+              {events.slice(0, 40).map((e, i) => (
+                <div className="event-row" key={i}>
+                  <span className="event-type">{e.type}</span>
+                  <span className="event-detail">{JSON.stringify(e).slice(0, 140)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
         <div className="widget col-3">
           <div className="widget-header">
             <div className="widget-title">Zones</div>
@@ -191,56 +242,6 @@ export function OperatorDashboard() {
           </div>
         </div>
 
-        <div className="widget col-12">
-          <div className="widget-header">
-            <div className="widget-title">Recent Penalties</div>
-            <div className="widget-sub">{snap.penalties.length}</div>
-          </div>
-          <div className="widget-body" style={{ padding: 0 }}>
-            <div className="table-wrap scroll">
-              <table className="log">
-                <thead>
-                  <tr>
-                    <th>Type</th>
-                    <th>Component</th>
-                    <th>Plate</th>
-                    <th>Fine</th>
-                    <th>Reason</th>
-                    <th>Time</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {snap.penalties.length === 0 && (
-                    <tr>
-                      <td colSpan={6} className="muted" style={{ textAlign: "center", padding: 24 }}>
-                        No penalties
-                      </td>
-                    </tr>
-                  )}
-                  {snap.penalties.map((p) => <PenaltyRow key={p.id} penalty={p} />)}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-
-        <div className="widget col-12">
-          <div className="widget-header">
-            <div className="widget-title">Live Events</div>
-            <div className="widget-sub">{events.length} received</div>
-          </div>
-          <div className="widget-body">
-            <div className="event-log">
-              {events.length === 0 && <div className="muted">Waiting for events…</div>}
-              {events.slice(0, 40).map((e, i) => (
-                <div className="event-row" key={i}>
-                  <span className="event-type">{e.type}</span>
-                  <span className="event-detail">{JSON.stringify(e).slice(0, 140)}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
       </div>
     </div>
   );

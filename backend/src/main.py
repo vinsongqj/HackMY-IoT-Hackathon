@@ -17,7 +17,7 @@ import event_mapping
 import gate_state
 import operator_routes
 import ws
-from level_layout import spot_names_by_distance_from_entry
+from level_layout import find_entry_exit_gates, spot_names_by_distance_from_entry
 from simulator_client import SimulatorClient
 from webhook_security import compute_signature, verify_signature
 
@@ -37,10 +37,16 @@ app.include_router(admin_routes.router)
 GATE_OPEN_RETRY_SECONDS = 5
 
 
-async def _open_all_gates_when_ready() -> None:
-    """The simulator may not be running yet when the backend starts (or the user
-    starts it after) - retry in the background instead of a one-shot attempt at
-    import time, so gates still end up open once the simulator actually connects."""
+async def _init_gates_when_ready() -> None:
+    """Puts the gates into their starting positions, and records which ones automation is
+    allowed to drive.
+
+    A gate with a zoneParent guards a parking zone, so it is driven per car: closed by
+    default, opened while a car is passing. A gate without one sits on the approach road
+    and stays open, as it always has.
+
+    The simulator may not be running yet when the backend starts (or the user starts it
+    afterwards) - retry in the background rather than a one-shot attempt at import time."""
     while True:
         try:
             barriers = await run_in_threadpool(client.list_barriers)
@@ -52,12 +58,23 @@ async def _open_all_gates_when_ready() -> None:
             # a successful-but-empty response isn't "done", keep waiting.
             await asyncio.sleep(GATE_OPEN_RETRY_SECONDS)
             continue
+
+        zoned = {b["name"] for b in barriers if b.get("zoneParent")}
+        gate_state.set_zoned_gates(zoned)
+
         for barrier in barriers:
+            name = barrier["name"]
+            if gate_state.is_manually_closed(name):
+                continue
+            action = client.close_gate if name in zoned else client.open_gate
             try:
-                await run_in_threadpool(client.open_gate, barrier["name"])
+                await run_in_threadpool(action, name)
             except Exception:
-                logger.exception("Failed to open gate %s at startup", barrier["name"])
-        logger.info("Opened %d gate(s) at startup", len(barriers))
+                logger.exception("Failed to set gate %s at startup", name)
+        logger.info(
+            "Gates initialised: %d zoned (auto, starting closed) %s, %d unzoned (left open)",
+            len(zoned), sorted(zoned), len(barriers) - len(zoned),
+        )
         return
 
 
@@ -132,7 +149,7 @@ async def _on_startup() -> None:
         queue: asyncio.Queue = asyncio.Queue()
         _webhook_queues.append(queue)
         asyncio.create_task(_webhook_worker(queue))
-    asyncio.create_task(_open_all_gates_when_ready())
+    asyncio.create_task(_init_gates_when_ready())
     asyncio.create_task(_seed_spot_occupancy())
     asyncio.create_task(_reroute_stalled_cars())
 
@@ -156,6 +173,11 @@ async def events_ws(websocket: WebSocket, token: str | None = None):
 
 SPOTS_BY_DISTANCE = spot_names_by_distance_from_entry()
 logger.info("Spots by distance from entry: %s", SPOTS_BY_DISTANCE)
+
+# The gates guarding the entry and exit spots, by proximity in the level file - there is no
+# entry/exit flag on a gate to read instead. Only used if they turn out to carry a zone.
+ENTRY_GATE, EXIT_GATE = find_entry_exit_gates()
+logger.info("Entry gate: %s, exit gate: %s", ENTRY_GATE, EXIT_GATE)
 
 last_sequence_id: int | None = None
 
@@ -219,6 +241,37 @@ def _release_hold(name: str, plate: str) -> None:
     hold = spot_holds.get(name)
     if hold is not None and hold[0] == plate:
         spot_holds.pop(name, None)
+
+
+def _automation_open(gate: str | None, plate: str) -> None:
+    """Opens a zoned gate for a car. Gates with no zone are left alone (they stay open),
+    and a gate the operator closed by hand is never reopened by automation."""
+    if gate is None or not gate_state.is_zoned(gate):
+        return
+    if gate_state.is_manually_closed(gate):
+        logger.info("Gate %s is manually closed, not opening it for %s", gate, plate)
+        return
+    if not gate_state.acquire(gate, plate):
+        return
+    try:
+        client.open_gate(gate)
+    except Exception:
+        logger.exception("Failed to open gate %s for %s", gate, plate)
+
+
+def _automation_close(gate: str | None, plate: str) -> None:
+    """Closes a zoned gate once the last car through it is clear. The claim is always
+    released, even for a manually closed gate, so the counts stay honest."""
+    if gate is None or not gate_state.is_zoned(gate):
+        return
+    if not gate_state.release(gate, plate):
+        return
+    if gate_state.is_manually_closed(gate):
+        return
+    try:
+        client.close_gate(gate)
+    except Exception:
+        logger.exception("Failed to close gate %s after %s", gate, plate)
 
 
 def _safe_car_goto(plate: str, destination: str) -> None:
@@ -391,6 +444,9 @@ def handle_car_spot_action(payload: dict) -> None:
         ws.broadcast_nowait(event)
 
     if spot_type == "EntrySpot" and direction == "CarIn":
+        # Open before routing: the car is told where to go straight after this, and it
+        # should not be sent at a gate that is still shut.
+        _automation_open(ENTRY_GATE, plate)
         car_car_type[plate] = car_type
         car_planned_duration[plate] = _planned_minutes(payload)
         spot_name = _route_to_spot(plate, car_type)
@@ -401,6 +457,9 @@ def handle_car_spot_action(payload: dict) -> None:
         if visit_id is not None:
             db.add_slot(visit_id, plate)
         logger.info("Routed %s to %s (visit %s)", plate, spot_name, visit_id)
+
+    elif spot_type == "EntrySpot" and direction == "CarOut":
+        _automation_close(ENTRY_GATE, plate)
 
     elif spot_type == "Park" and direction == "CarIn":
         # SpotName from the webhook beats our own record of where we sent the car: it is
@@ -453,6 +512,7 @@ def handle_car_spot_action(payload: dict) -> None:
             )
 
     elif spot_type == "ExitSpot" and direction == "CarIn":
+        _automation_open(EXIT_GATE, plate)
         charge = car_pending_charge.pop(plate, None)
         if charge is None:
             # Same reasoning as above, and worse here: a car that is never charged can
@@ -471,6 +531,9 @@ def handle_car_spot_action(payload: dict) -> None:
         visit_id = car_visit_id.get(plate)
         if visit_id is not None:
             db.update_visit(visit_id, status="at_exit")
+
+    elif spot_type == "ExitSpot" and direction == "CarOut":
+        _automation_close(EXIT_GATE, plate)
 
 
 def handle_payment_made(payload: dict) -> None:
@@ -505,12 +568,27 @@ def handle_gate_action(payload: dict) -> None:
     if event:
         ws.broadcast_nowait(event)
 
-    if payload["Action"] == "Closed" and not gate_state.is_manually_closed(name):
-        logger.warning("Gate %s closed unexpectedly, reopening", name)
-        try:
-            client.open_gate(name)
-        except Exception:
-            logger.exception("Failed to reopen gate %s", name)
+    if payload["Action"] != "Closed" or gate_state.is_manually_closed(name):
+        return
+
+    if gate_state.is_zoned(name):
+        # Zoned gates are supposed to close - that is the whole point. Only force one back
+        # open if cars are still passing through it, which means it closed on them.
+        if gate_state.holder_count(name) > 0:
+            logger.warning("Gate %s closed with %d car(s) still passing, reopening",
+                           name, gate_state.holder_count(name))
+            try:
+                client.open_gate(name)
+            except Exception:
+                logger.exception("Failed to reopen gate %s", name)
+        return
+
+    # Unzoned gates sit on the approach roads and are meant to stay open.
+    logger.warning("Gate %s closed unexpectedly, reopening", name)
+    try:
+        client.open_gate(name)
+    except Exception:
+        logger.exception("Failed to reopen gate %s", name)
 
 
 def handle_component_broken(payload: dict) -> None:
