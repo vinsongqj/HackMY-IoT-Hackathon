@@ -28,3 +28,43 @@
    ```
 
 5. Run the simulator (`ParkingSimulator.exe`) alongside it.
+
+## Run with Docker
+
+Both services are containerized and wired together with `docker compose`:
+
+- **backend** — FastAPI/uvicorn from `backend/Dockerfile`, listening on `:8000`.
+  `backend/.env` is injected into the container via `env_file`; secrets are never
+  baked into the image.
+- **frontend** — the Vite build served by nginx from `frontend/Dockerfile`, on
+  `http://localhost:8080`. nginx reverse-proxies `/api` and `/ws` to the backend
+  container, so the app stays same-origin (no CORS setup needed).
+
+1. Create `backend/.env` (step 2 above) and fill in your Supabase credentials.
+
+2. Start the simulator on the host as usual, then build and run:
+
+   ```
+   docker compose up --build
+   ```
+
+   Open the dashboard at http://localhost:8080.
+
+3. The backend container reaches the simulator on your host through
+   `http://host.docker.internal:9898`, which is its default. If your simulator
+   listens elsewhere, override it in `backend/.env`:
+
+   ```
+   SIMULATOR_BASE_URL=http://host.docker.internal:9898
+   ```
+
+   `host.docker.internal` is mapped to the host via `extra_hosts` in
+   `docker-compose.yml`, so this also works on Linux. Alternatively, mount the
+   simulator's `settings/` folder (see the commented `volumes` entry) to reuse its
+   `ListenAddress` / `Name` / `Password`.
+
+Because the backend publishes port 8000, the simulator's existing
+`WebhookUrl` of `http://localhost:8000/webhook` keeps working unchanged.
+
+Handy targets: `make docker-build`, `make docker-up`, `make docker-down`,
+`make docker-logs`.
