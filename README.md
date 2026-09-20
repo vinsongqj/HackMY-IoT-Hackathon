@@ -35,9 +35,9 @@ Developed for Track 2 of the HackMY IoT hackathon (organized by La French Tech M
 
 6. Run the frontend dashboard.
   ```
-  cd frontend
-  npm install
-  npm run dev
+    cd frontend
+    npm install
+    npm run dev
   ```
 7. Copy and paste the localhost URL or just press `o` and enter to open the webview.
 
